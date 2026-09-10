@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// TENANTS: cada negocio cliente de tu SaaS
+// ---------------------------------------------------------------------------
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  plan      String   @default("trial") // trial | starter | pro | enterprise
+  status    String   @default("active") // active | suspended | cancelled
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  metaIntegration MetaIntegration?
+  users           User[]
+  contacts        Contact[]
+  conversations   Conversation[]
+  botFlows        BotFlow[]
+  templates       Template[]
+
+  @@map("tenants")
+}
+
+// ---------------------------------------------------------------------------
+// META_INTEGRATIONS: credenciales de WhatsApp Cloud API por tenant
+// El access_token y app_secret_proof se guardan CIFRADOS (ver src/utils/crypto.js)
+// ---------------------------------------------------------------------------
+model MetaIntegration {
+  id                String   @id @default(uuid())
+  tenantId          String   @unique @map("tenant_id")
+  wabaId            String   @map("waba_id")
+  phoneNumberId     String   @unique @map("phone_number_id")
+  displayPhoneNumber String  @map("display_phone_number")
+  accessTokenEnc    String   @map("access_token_enc") // token de System User, cifrado
+  isCoexistence     Boolean  @default(false) @map("is_coexistence")
+  syncStatus        String   @default("not_applicable") @map("sync_status") // not_applicable | pending | in_progress | complete
+  historySyncDeadline DateTime? @map("history_sync_deadline")
+  qualityRating     String?  @map("quality_rating")
+  messagingTier     String?  @map("messaging_tier")
+  connectedAt       DateTime @default(now()) @map("connected_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("meta_integrations")
+}
+
+// ---------------------------------------------------------------------------
+// USERS: agentes/administradores dentro de un tenant
+// ---------------------------------------------------------------------------
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  email        String
+  name         String
+  passwordHash String   @map("password_hash")
+  role         String   @default("agent") // admin | supervisor | agent
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant               Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedConversations Conversation[]
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// CONTACTS
+// ---------------------------------------------------------------------------
+model Contact {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  waId        String   @map("wa_id") // número de WhatsApp del contacto
+  name        String?
+  tags        String[] @default([])
+  customFields Json?   @map("custom_fields")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([tenantId, waId])
+  @@map("contacts")
+}
+
+// ---------------------------------------------------------------------------
+// CONVERSATIONS
+// ---------------------------------------------------------------------------
+model Conversation {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  contactId      String   @map("contact_id")
+  assignedUserId String?  @map("assigned_user_id")
+  status         String   @default("open") // open | pending | closed
+  botActive      Boolean  @default(true) @map("bot_active")
+  stage          String?  // etapa de pipeline (nuevo, contactado, negociacion, cerrado)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedUser User?     @relation(fields: [assignedUserId], references: [id])
+  messages     Message[]
+
+  @@map("conversations")
+}
+
+// ---------------------------------------------------------------------------
+// MESSAGES
+// ---------------------------------------------------------------------------
+model Message {
+  id                String   @id @default(uuid())
+  conversationId    String   @map("conversation_id")
+  direction         String   // inbound | outbound
+  source            String   @default("cloud_api") // cloud_api | smb_echo (coexistencia)
+  type              String   // text | image | template | interactive | ...
+  content           Json
+  whatsappMessageId String?  @map("whatsapp_message_id")
+  status            String   @default("sent") // sent | delivered | read | failed
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([whatsappMessageId])
+  @@map("messages")
+}
+
+// ---------------------------------------------------------------------------
+// BOT_FLOWS / BOT_NODES: árbol de decisión configurable por tenant
+// ---------------------------------------------------------------------------
+model BotFlow {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  name      String
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  nodes  BotNode[]
+
+  @@map("bot_flows")
+}
+
+model BotNode {
+  id         String  @id @default(uuid())
+  flowId     String  @map("flow_id")
+  type       String  // message | question | condition | action | handoff
+  config     Json    // contenido del nodo (texto, opciones, condiciones, etc.)
+  nextNodeIds String[] @default([]) @map("next_node_ids")
+
+  flow BotFlow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@map("bot_nodes")
+}
+
+// ---------------------------------------------------------------------------
+// TEMPLATES: plantillas HSM aprobadas por Meta, por tenant
+// ---------------------------------------------------------------------------
+model Template {
+  id             String @id @default(uuid())
+  tenantId       String @map("tenant_id")
+  metaTemplateName String @map("meta_template_name")
+  category       String // MARKETING | UTILITY | AUTHENTICATION
+  status         String @default("pending") // pending | approved | rejected
+  language       String @default("es")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("templates")
+}
