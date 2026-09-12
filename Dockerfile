@@ -2,6 +2,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Prisma necesita OpenSSL presente para detectar la plataforma correctamente.
+RUN apk add --no-cache openssl
+
 COPY package*.json ./
 COPY prisma ./prisma
 RUN npm ci --omit=dev

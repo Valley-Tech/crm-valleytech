@@ -11,6 +11,10 @@
 
 generator client {
   provider = "prisma-client-js"
+  // Motores que Prisma debe preparar. Sin esto, en el contenedor de Railway
+  // (Alpine/musl con OpenSSL 3) la detección falla, asume OpenSSL 1.1 y el
+  // cliente revienta con "Error loading shared library libssl.so.1.1".
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
 }
 
 datasource db {
