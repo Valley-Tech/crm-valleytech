@@ -1,32 +1,42 @@
-import express from 'express';
-import helmet from 'helmet';
-import pinoHttp from 'pino-http';
-import config from './config/env.js';
-import webhookRoutes from './routes/webhook.routes.js';
-import healthRoutes from './routes/health.routes.js';
-import './queue/worker.js'; // arranca el worker de BullMQ en el mismo proceso (separar en producción)
+import http from 'node:http';
+import env from './config/env.js';
+import logger from './lib/logger.js';
+import prisma from './lib/prisma.js';
+import { redis } from './lib/redis.js';
+import { createApp } from './http/app.js';
+import { attachRealtime } from './realtime/io.js';
+import { closeQueues } from './queues/index.js';
 
-const app = express();
+const app = createApp();
+const server = http.createServer(app);
 
-app.use(helmet());
-app.use(pinoHttp());
+attachRealtime(server);
 
-app.use(healthRoutes);
-
-// El webhook se registra ANTES del parser JSON global: internamente usa
-// express.raw() para poder verificar la firma HMAC sobre el body crudo.
-// Si express.json() se ejecutara primero, ya habría consumido el stream
-// y el body crudo llegaría vacío a verifyMetaSignature.
-app.use(webhookRoutes);
-
-// El resto de rutas de la API del CRM sí puede usar JSON normal.
-app.use(express.json({ limit: '5mb' }));
-
-app.use((err, req, res, next) => {
-  req.log?.error(err);
-  res.status(500).json({ error: 'Error interno del servidor' });
+server.listen(env.PORT, () => {
+  logger.info(
+    { port: env.PORT, env: env.NODE_ENV, webhook: `${env.PUBLIC_URL}/webhooks/meta` },
+    'CRM ValleyTech escuchando'
+  );
 });
 
-app.listen(config.PORT, () => {
-  console.log(`CRM WhatsApp escuchando en el puerto ${config.PORT}`);
+async function shutdown(signal) {
+  logger.info({ signal }, 'Cerrando el servidor web');
+  server.close();
+  try {
+    await closeQueues();
+    await prisma.$disconnect();
+    await redis.quit();
+  } catch (err) {
+    logger.error({ err }, 'Error durante el cierre');
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (err) => logger.error({ err }, 'Promesa rechazada sin manejar'));
+process.on('uncaughtException', (err) => {
+  logger.fatal({ err }, 'Excepción no capturada');
+  process.exit(1);
 });
