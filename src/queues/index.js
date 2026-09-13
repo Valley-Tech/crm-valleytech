@@ -6,6 +6,7 @@ export const QUEUE = {
   outbound: 'crm.outbound',
   media: 'crm.media',
   botDispatch: 'crm.bot-dispatch',
+  campaign: 'crm.campaign',
 };
 
 const defaultJobOptions = {
@@ -24,7 +25,12 @@ export const botDispatchQueue = new Queue(QUEUE.botDispatch, {
   defaultJobOptions: { ...defaultJobOptions, attempts: 4 },
 });
 
-export const allQueues = [inboundQueue, outboundQueue, mediaQueue, botDispatchQueue];
+export const campaignQueue = new Queue(QUEUE.campaign, {
+  connection: redis,
+  defaultJobOptions: { ...defaultJobOptions, attempts: 3 },
+});
+
+export const allQueues = [inboundQueue, outboundQueue, mediaQueue, botDispatchQueue, campaignQueue];
 
 export async function closeQueues() {
   await Promise.all(allQueues.map((queue) => queue.close()));

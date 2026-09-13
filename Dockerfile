@@ -11,6 +11,9 @@ RUN npm ci --omit=dev
 
 COPY . .
 
+# Compila la interfaz React (web/dist). El servidor la sirve como estáticos.
+RUN npm run build
+
 ENV NODE_ENV=production
 EXPOSE 3000
 

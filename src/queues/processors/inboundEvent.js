@@ -10,6 +10,7 @@ import {
 } from '../../services/conversations.js';
 import { rankOf, serializeMessage } from '../../services/messaging.js';
 import { buildBotEvent, dispatchToBots } from '../../services/botGateway.js';
+import { syncRecipientFromMessage } from '../../services/campaigns.js';
 
 const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
 
@@ -107,6 +108,9 @@ async function handleStatuses(integration, statuses) {
           type: 'message:status',
           payload: { id: message.id, status: message.status, errorCode: message.errorCode },
         });
+
+        // Si el mensaje pertenece a una campaña, el destinatario avanza con él.
+        await syncRecipientFromMessage(message);
 
         // Meta factura por plantilla enviada: se contabiliza al confirmarse.
         if (status.status === 'sent' && status.pricing?.category) {
@@ -332,11 +336,25 @@ async function handleMessageEchoes(integration, value) {
       preview: echo.text?.body ?? `[${echo.type}]`,
     });
 
-    // Si el dueño contestó a mano, el bot se calla en ese hilo.
-    await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { botActive: false, botPausedUntil: null },
-    });
+    const saved = await prisma.message.findUnique({ where: { waMessageId: echo.id } });
+    if (saved) {
+      await publishEvent({
+        tenantId,
+        conversationId: conversation.id,
+        type: 'message:created',
+        payload: serializeMessage(saved),
+      });
+    }
+
+    // Un eco es un mensaje enviado desde la app de WhatsApp Business: puede ser
+    // el dueño o la IA de Meta, y el webhook no distingue. Solo pausa el bot del
+    // Bot Gateway si la integración lo pide explícitamente.
+    if (integration.echoPausesBot) {
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { botActive: false, botPausedUntil: null },
+      });
+    }
   }
 
   return { echoes: value?.message_echoes?.length ?? 0 };

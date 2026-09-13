@@ -26,12 +26,19 @@ npm run keygen   # ejecútalo dos veces: una para JWT_SECRET, otra para CREDENTI
 npm run setup
 #   Imprime el correo y la contraseña del primer usuario. Guárdalos.
 
-# 5. Los dos procesos (en dos terminales)
-npm run dev          # API + bandeja web  → http://localhost:3000
+# 5. La interfaz (una sola vez, o cada vez que cambies algo en web/)
+npm run build
+
+# 6. Los dos procesos (en dos terminales)
+npm run dev          # API + interfaz compilada  → http://localhost:3000
 npm run dev:worker   # procesa las colas
 ```
 
 Abre <http://localhost:3000> y entra con las credenciales que imprimió el paso 4.
+
+> Para trabajar sobre la interfaz con recarga en caliente: `npm run dev:web` abre Vite en
+> <http://localhost:5173> y reenvía la API al :3000. En producción no hace falta: el
+> Dockerfile ejecuta `npm run build` y Express sirve `web/dist`.
 
 > **El worker no es opcional.** El proceso web solo encola; si el worker no corre, los
 > mensajes entrantes no se guardan y los salientes no salen.
@@ -71,6 +78,35 @@ curl -X POST http://localhost:3000/api/integrations/meta \
 El CRM valida el token contra Meta antes de guardarlo, suscribe tu app a esa WABA y
 almacena el token cifrado con AES-256-GCM. Cuando Meta apruebe la revisión, el mismo
 flujo existe automatizado en `POST /api/integrations/meta/embedded-signup`.
+
+---
+
+## Qué trae la versión 2
+
+| Módulo | Qué hace |
+|---|---|
+| **Bandeja** | Tres paneles: lista con filtros (no leídas, mías, sin asignar, bot activo…), hilo con todos los tipos de mensaje (texto, imagen, audio, video, documento, ubicación, contactos, botones, listas, respuestas de Flows, pedidos del catálogo, reacciones, plantillas) y panel de contacto (etiquetas, embudo, asignación, notas, ventana de 24 h). Respuestas rápidas con `/`, adjuntos, envío de plantillas con parámetros. |
+| **Contactos** | Búsqueda, filtro por etiqueta, ficha con historial de conversaciones. |
+| **Campañas** | Envío masivo de una plantilla aprobada a todos los contactos o a un segmento por etiqueta, con parámetros dinámicos (`{{contact.name}}`), programación, pausa/reanudación y seguimiento por destinatario. |
+| **Plantillas** | Sincronización desde Meta y vista previa tal como la ve el cliente. |
+| **Dashboard** | Conversaciones, mensajes por día, primera respuesta (mediana), embudo, agentes, plantillas por categoría, salud de los números. |
+| **Números** | Conectar por **registro insertado** (cuenta nueva o propia), por **coexistencia** (cuenta que ya usa la app) o **manual**. Calidad, límite, modo, interruptores. |
+| **Chatbots** | Registrar bots del Bot Gateway desde la interfaz; credenciales se muestran una sola vez. |
+| **Equipo** | Usuarios, roles, activación y cambio de contraseña. |
+| **Ajustes** | Respuestas rápidas y enlaces a las páginas legales (`/privacidad`, `/terminos`). |
+
+### Registro insertado (Embedded Signup)
+
+1. En Meta for Developers → tu app → **Inicio de sesión con Facebook para empresas → Configuraciones**, crea una configuración de tipo *Registro insertado de WhatsApp* y copia su **ID de configuración**.
+2. Ponlo en el servidor: `META_EMBEDDED_SIGNUP_CONFIG_ID=...`.
+3. Agrega el dominio del CRM a los **dominios de la app** y a los dominios autorizados de esa configuración (solo https).
+4. En **Números → Conectar número** aparecen las pestañas *Cuenta nueva o propia* y *Cuenta que ya usa la app* (coexistencia). Hasta que Meta apruebe la revisión, solo funciona para usuarios con rol en la app.
+
+### Coexistencia
+
+Para números que el cliente sigue usando desde la app de WhatsApp Business. En Meta → WhatsApp → Configuración → **Campos del webhook** suscribe además de `messages`: `history`, `smb_message_echoes` y `smb_app_state_sync`. Los mensajes enviados desde la app (por una persona o por la IA de Meta) llegan como *ecos* y se muestran en la bandeja con la marca «desde la app». El interruptor **Eco pausa bot** de cada número decide si un eco pausa el chatbot del Bot Gateway.
+
+> La IA de Meta (Business Agent) vive en la app, no en la Cloud API: el CRM la muestra pero no puede pausarla ni configurarla.
 
 ---
 

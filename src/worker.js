@@ -8,6 +8,7 @@ import processInboundEvent from './queues/processors/inboundEvent.js';
 import processOutboundMessage from './queues/processors/outboundMessage.js';
 import processMediaDownload from './queues/processors/mediaDownload.js';
 import processBotDispatch from './queues/processors/botDispatch.js';
+import processCampaignSend from './queues/processors/campaignSend.js';
 
 /**
  * Proceso worker, separado del web a propósito.
@@ -26,6 +27,8 @@ const workers = [
   }),
   new Worker(QUEUE.media, processMediaDownload, { connection: redis, concurrency: 3 }),
   new Worker(QUEUE.botDispatch, processBotDispatch, { connection: redis, concurrency: 10 }),
+  // Una campaña a la vez por worker: el ritmo real lo marca la cola de salida.
+  new Worker(QUEUE.campaign, processCampaignSend, { connection: redis, concurrency: 1 }),
 ];
 
 for (const worker of workers) {

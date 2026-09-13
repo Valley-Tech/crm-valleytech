@@ -10,7 +10,6 @@ import { hashPassword } from '../../lib/password.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { recordAudit } from '../../services/audit.js';
 import { usageSummary } from '../../services/usage.js';
-import { listTemplates } from '../../whatsapp/templates.js';
 import {
   exchangeCodeForToken,
   debugToken,
@@ -39,6 +38,7 @@ function serializeIntegration(integration) {
     messagingTier: integration.messagingTier,
     isCoexistence: integration.isCoexistence,
     onboardingMethod: integration.onboardingMethod,
+    echoPausesBot: integration.echoPausesBot,
     active: integration.active,
     connectedAt: integration.connectedAt,
   };
@@ -136,6 +136,9 @@ router.post(
         code: z.string().min(10),
         wabaId: z.string().optional(),
         phoneNumberId: z.string().optional(),
+        // true cuando el diálogo terminó con FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING:
+        // el cliente conectó un número que ya usa en la app de WhatsApp Business.
+        coexistence: z.boolean().default(false),
       })
       .parse(req.body);
 
@@ -165,7 +168,11 @@ router.post(
         accessTokenEnc: encryptSecret(accessToken),
         displayPhoneNumber: phone?.display_phone_number ?? '',
         verifiedName: phone?.verified_name ?? null,
+        qualityRating: phone?.quality_rating ?? null,
+        messagingTier: phone?.messaging_limit_tier ?? null,
         active: true,
+        isCoexistence: input.coexistence,
+        syncStatus: input.coexistence ? 'pending' : 'not_applicable',
         onboardingMethod: 'embedded_signup',
       },
       create: {
@@ -174,7 +181,11 @@ router.post(
         phoneNumberId,
         displayPhoneNumber: phone?.display_phone_number ?? '',
         verifiedName: phone?.verified_name ?? null,
+        qualityRating: phone?.quality_rating ?? null,
+        messagingTier: phone?.messaging_limit_tier ?? null,
         accessTokenEnc: encryptSecret(accessToken),
+        isCoexistence: input.coexistence,
+        syncStatus: input.coexistence ? 'pending' : 'not_applicable',
         onboardingMethod: 'embedded_signup',
       },
     });
@@ -215,7 +226,9 @@ router.post(
 router.patch(
   '/integrations/:id',
   asyncHandler(async (req, res) => {
-    const data = z.object({ active: z.boolean() }).parse(req.body);
+    const data = z
+      .object({ active: z.boolean().optional(), echoPausesBot: z.boolean().optional() })
+      .parse(req.body);
     const integration = await prisma.metaIntegration.findFirst({
       where: { id: req.params.id, tenantId: req.auth.tenantId },
     });
@@ -223,77 +236,6 @@ router.patch(
 
     const updated = await prisma.metaIntegration.update({ where: { id: integration.id }, data });
     res.json(serializeIntegration(updated));
-  })
-);
-
-// ===========================================================================
-//  Plantillas
-// ===========================================================================
-
-router.get(
-  '/templates',
-  asyncHandler(async (req, res) => {
-    const items = await prisma.template.findMany({
-      where: { tenantId: req.auth.tenantId },
-      orderBy: [{ status: 'asc' }, { name: 'asc' }],
-    });
-    res.json({ items });
-  })
-);
-
-/** Trae de Meta las plantillas aprobadas y las guarda localmente. */
-router.post(
-  '/templates/sync',
-  asyncHandler(async (req, res) => {
-    const integrations = await prisma.metaIntegration.findMany({
-      where: { tenantId: req.auth.tenantId, active: true },
-    });
-    if (integrations.length === 0) throw badRequest('No hay integraciones activas que sincronizar');
-
-    const seenWabas = new Set();
-    let synced = 0;
-
-    for (const integration of integrations) {
-      if (seenWabas.has(integration.wabaId)) continue;
-      seenWabas.add(integration.wabaId);
-
-      const accessToken = decryptSecret(integration.accessTokenEnc);
-      const templates = await listTemplates(integration.wabaId, accessToken);
-
-      for (const template of templates) {
-        const status = String(template.status ?? 'PENDING').toLowerCase();
-        await prisma.template.upsert({
-          where: {
-            tenantId_name_language: {
-              tenantId: req.auth.tenantId,
-              name: template.name,
-              language: template.language,
-            },
-          },
-          update: {
-            wabaId: integration.wabaId,
-            metaTemplateId: template.id,
-            category: template.category ?? 'UTILITY',
-            status: ['approved', 'rejected', 'paused', 'disabled'].includes(status) ? status : 'pending',
-            components: template.components ?? undefined,
-            syncedAt: new Date(),
-          },
-          create: {
-            tenantId: req.auth.tenantId,
-            wabaId: integration.wabaId,
-            metaTemplateId: template.id,
-            name: template.name,
-            language: template.language,
-            category: template.category ?? 'UTILITY',
-            status: ['approved', 'rejected', 'paused', 'disabled'].includes(status) ? status : 'pending',
-            components: template.components ?? undefined,
-          },
-        });
-        synced += 1;
-      }
-    }
-
-    res.json({ synced });
   })
 );
 
@@ -471,6 +413,46 @@ router.post(
     });
 
     res.status(201).json(user);
+  })
+);
+
+router.patch(
+  '/users/:id',
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({
+        name: z.string().min(2).max(80).optional(),
+        role: z.enum(['owner', 'admin', 'agent', 'viewer']).optional(),
+        active: z.boolean().optional(),
+        password: z.string().min(10).optional(),
+      })
+      .parse(req.body);
+
+    const user = await prisma.user.findFirst({ where: { id: req.params.id, tenantId: req.auth.tenantId } });
+    if (!user) throw notFound('Usuario no encontrado');
+
+    // Nadie se quita a sí mismo el acceso ni el rol de dueño por accidente.
+    if (user.id === req.auth.userId && (input.active === false || (input.role && input.role !== user.role))) {
+      throw badRequest('No puedes cambiar tu propio rol ni desactivarte');
+    }
+
+    const { password, ...rest } = input;
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { ...rest, ...(password ? { passwordHash: await hashPassword(password) } : {}) },
+      select: { id: true, name: true, email: true, role: true, active: true, lastLoginAt: true },
+    });
+
+    await recordAudit({
+      tenantId: req.auth.tenantId,
+      actorUserId: req.auth.userId,
+      action: 'user.update',
+      entity: 'user',
+      entityId: user.id,
+      metadata: rest,
+    });
+
+    res.json(updated);
   })
 );
 

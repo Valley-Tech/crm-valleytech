@@ -1,0 +1,29 @@
+import React from 'react';
+
+const base = { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' };
+
+export const I = {
+  inbox: () => <svg {...base}><path d="M4 4h16v10l-3 4H7l-3-4z" /><path d="M4 14h5l1 2h4l1-2h5" /></svg>,
+  contacts: () => <svg {...base}><circle cx="9" cy="8" r="3.5" /><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" /><path d="M16 4.5a3.5 3.5 0 0 1 0 7" /><path d="M18 14c2 .7 3.5 2.6 3.5 5" /></svg>,
+  campaigns: () => <svg {...base}><path d="M4 10v4h3l7 4V6l-7 4z" /><path d="M17 9a4 4 0 0 1 0 6" /></svg>,
+  templates: () => <svg {...base}><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M8 9h8M8 13h8M8 17h5" /></svg>,
+  dashboard: () => <svg {...base}><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="3" width="8" height="5" rx="1.5" /><rect x="13" y="10" width="8" height="11" rx="1.5" /><rect x="3" y="13" width="8" height="8" rx="1.5" /></svg>,
+  team: () => <svg {...base}><circle cx="8" cy="8" r="3" /><circle cx="17" cy="9" r="2.5" /><path d="M2.5 19c0-3 2.5-5.5 5.5-5.5s5.5 2.5 5.5 5.5" /><path d="M14 19c0-2 1.5-4 3.5-4s3.5 2 3.5 4" /></svg>,
+  bots: () => <svg {...base}><rect x="5" y="8" width="14" height="11" rx="2" /><path d="M12 8V4M9 4h6" /><circle cx="9.5" cy="13" r="1" fill="currentColor" /><circle cx="14.5" cy="13" r="1" fill="currentColor" /><path d="M9 16.5h6" /></svg>,
+  numbers: () => <svg {...base}><path d="M6 3h4l2 5-2.5 1.5a11 11 0 0 0 5 5L16 12l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 4 5a2 2 0 0 1 2-2z" /></svg>,
+  settings: () => <svg {...base}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>,
+  send: () => <svg {...base}><path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4z" /></svg>,
+  clip: () => <svg {...base}><path d="m21 11.5-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.5 3.5 0 0 1 5 5L9.7 17.2a1.5 1.5 0 0 1-2.1-2.1L15.5 7" /></svg>,
+  template: () => <svg {...base}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 10h18M8 15h4" /></svg>,
+  bolt: () => <svg {...base}><path d="M13 2 4 14h7l-1 8 9-12h-7z" /></svg>,
+  back: () => <svg {...base}><path d="m15 18-6-6 6-6" /></svg>,
+  user: () => <svg {...base}><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7" /></svg>,
+  doc: () => <svg {...base}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></svg>,
+  pin: () => <svg {...base}><path d="M12 22s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z" /><circle cx="12" cy="10" r="2.5" /></svg>,
+  pause: () => <svg {...base}><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>,
+  play: () => <svg {...base}><path d="M6 4l14 8-14 8z" /></svg>,
+  check: () => <svg {...base}><path d="m5 12 5 5 9-10" /></svg>,
+  plus: () => <svg {...base}><path d="M12 5v14M5 12h14" /></svg>,
+  refresh: () => <svg {...base}><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" /></svg>,
+  logout: () => <svg {...base}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></svg>,
+};

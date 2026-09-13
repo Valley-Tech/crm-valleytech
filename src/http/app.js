@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -10,7 +11,12 @@ import healthRoutes from './routes/health.routes.js';
 import apiRoutes from './routes/index.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
-const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../public');
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const publicDir = path.join(rootDir, 'public');
+// Interfaz React compilada (npm run build). Si no existe, cae a la bandeja
+// básica de public/index.html para que el servidor nunca quede sin interfaz.
+const webDist = path.join(rootDir, 'web', 'dist');
+const hasWebBuild = fs.existsSync(path.join(webDist, 'index.html'));
 
 export function createApp() {
   const app = express();
@@ -39,8 +45,17 @@ export function createApp() {
 
   app.use(apiRoutes);
 
-  app.use(express.static(publicDir));
-  app.get('/', (req, res) => res.sendFile(path.join(publicDir, 'index.html')));
+  if (hasWebBuild) {
+    app.use(express.static(webDist, { index: false, maxAge: '1h' }));
+    // SPA: cualquier ruta que no sea API ni webhook devuelve index.html y React enruta.
+    app.get(/^(?!\/api|\/webhooks|\/health|\/socket\.io).*/, (req, res) =>
+      res.sendFile(path.join(webDist, 'index.html'))
+    );
+  } else {
+    logger.warn('web/dist no existe: sirviendo la bandeja básica de public/. Ejecuta npm run build.');
+    app.use(express.static(publicDir));
+    app.get('/', (req, res) => res.sendFile(path.join(publicDir, 'index.html')));
+  }
 
   app.use(notFoundHandler);
   app.use(errorHandler);

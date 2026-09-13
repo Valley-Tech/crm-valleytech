@@ -18,3 +18,24 @@ export async function downloadMedia(mediaId, accessToken) {
     sha256: meta.sha256,
   };
 }
+
+/**
+ * Sube un archivo a Meta para poder enviarlo por su id.
+ * Usa FormData/Blob nativos de Node 20; axios los serializa como multipart.
+ */
+export async function uploadMedia({ phoneNumberId, accessToken, buffer, mimeType, filename }) {
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('type', mimeType);
+  form.append('file', new Blob([buffer], { type: mimeType }), filename ?? 'archivo');
+
+  const data = await graphRequest({
+    method: 'POST',
+    path: `${phoneNumberId}/media`,
+    accessToken,
+    data: form,
+    timeout: 60000,
+  });
+
+  return { mediaId: data?.id ?? null };
+}

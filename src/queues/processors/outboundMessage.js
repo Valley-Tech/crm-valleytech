@@ -7,6 +7,7 @@ import { resolveIntegration } from '../../services/conversations.js';
 import { rankOf } from '../../services/messaging.js';
 import { recordUsage } from '../../services/usage.js';
 import { publishEvent } from '../../realtime/events.js';
+import { syncRecipientFromMessage } from '../../services/campaigns.js';
 
 async function markFailed(message, { code, reason }) {
   const updated = await prisma.message.update({
@@ -26,6 +27,7 @@ async function markFailed(message, { code, reason }) {
     payload: { id: message.id, status: 'failed', errorCode: code, errorMessage: reason },
   });
 
+  await syncRecipientFromMessage(updated);
   return updated;
 }
 
@@ -67,10 +69,11 @@ export default async function processOutboundMessage(job) {
       message: message.content,
     });
 
-    await prisma.message.update({
+    const sentMessage = await prisma.message.update({
       where: { id: message.id },
       data: { status: 'sent', statusRank: rankOf('sent'), waMessageId },
     });
+    await syncRecipientFromMessage(sentMessage);
 
     await recordUsage({
       tenantId: message.tenantId,

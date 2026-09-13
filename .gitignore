@@ -6,3 +6,7 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# Interfaz React
+web/node_modules/
+web/dist/

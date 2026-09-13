@@ -46,6 +46,7 @@ export async function sendOutbound({
   message,
   source = 'agent',
   userId = null,
+  campaignId = null,
   allowOutsideWindow = false,
 }) {
   if (!message?.type) throw badRequest('El mensaje necesita un campo "type"');
@@ -83,6 +84,7 @@ export async function sendOutbound({
       status: 'queued',
       statusRank: STATUS_RANK.queued,
       sentByUserId: userId,
+      campaignId,
     },
   });
 

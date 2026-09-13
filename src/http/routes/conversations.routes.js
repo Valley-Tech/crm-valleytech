@@ -1,8 +1,11 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
 import prisma from '../../lib/prisma.js';
+import logger from '../../lib/logger.js';
 import { asyncHandler } from '../../lib/http.js';
 import { notFound, badRequest } from '../../lib/errors.js';
+import { decryptSecret } from '../../lib/crypto.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendOutbound, serializeMessage } from '../../services/messaging.js';
 import {
@@ -10,9 +13,23 @@ import {
   resumeBot,
   isWithinServiceWindow,
   windowExpiresAt,
+  resolveIntegration,
 } from '../../services/conversations.js';
 import { publishEvent } from '../../realtime/events.js';
 import { recordAudit } from '../../services/audit.js';
+import { uploadMedia } from '../../whatsapp/media.js';
+import { markAsRead } from '../../whatsapp/messages.js';
+import { putObject } from '../../storage/index.js';
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
+
+/** Tipo de mensaje de WhatsApp según el MIME del archivo subido. */
+function mediaTypeFor(mimeType = '') {
+  if (mimeType.startsWith('image/')) return mimeType === 'image/webp' ? 'sticker' : 'image';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  return 'document';
+}
 
 const router = Router();
 router.use(requireAuth);
@@ -59,6 +76,9 @@ function serializeConversation(conversation) {
 const listQuery = z.object({
   status: z.enum(['open', 'pending', 'closed']).optional(),
   assignedUserId: z.string().uuid().optional(),
+  unassigned: z.coerce.boolean().optional(),
+  botActive: z.coerce.boolean().optional(),
+  unread: z.coerce.boolean().optional(),
   stage: z.string().optional(),
   q: z.string().trim().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
@@ -68,12 +88,15 @@ const listQuery = z.object({
 router.get(
   '/conversations',
   asyncHandler(async (req, res) => {
-    const { status, assignedUserId, stage, q, limit, offset } = listQuery.parse(req.query);
+    const { status, assignedUserId, unassigned, botActive, unread, stage, q, limit, offset } = listQuery.parse(req.query);
 
     const where = {
       tenantId: req.auth.tenantId,
       ...(status ? { status } : {}),
       ...(assignedUserId ? { assignedUserId } : {}),
+      ...(unassigned ? { assignedUserId: null } : {}),
+      ...(botActive !== undefined ? { botActive } : {}),
+      ...(unread ? { unreadCount: { gt: 0 } } : {}),
       ...(stage ? { pipelineStage: stage } : {}),
       ...(q
         ? {
@@ -175,6 +198,66 @@ router.post(
   })
 );
 
+/**
+ * Enviar un archivo: se sube a Meta (que devuelve un media id) y luego se
+ * envía como mensaje de imagen/video/audio/documento con ese id.
+ */
+router.post(
+  '/conversations/:id/media',
+  requireRole('agent'),
+  upload.single('file'),
+  asyncHandler(async (req, res) => {
+    const conversation = await loadConversation(req);
+    if (!req.file) throw badRequest('Adjunta un archivo en el campo "file"');
+
+    const integration = await resolveIntegration(conversation);
+    if (!integration) throw badRequest('Este cliente no tiene un número de WhatsApp activo');
+
+    const type = mediaTypeFor(req.file.mimetype);
+    const { mediaId } = await uploadMedia({
+      phoneNumberId: integration.phoneNumberId,
+      accessToken: decryptSecret(integration.accessTokenEnc),
+      buffer: req.file.buffer,
+      mimeType: req.file.mimetype,
+      filename: req.file.originalname,
+    });
+    if (!mediaId) throw badRequest('Meta no devolvió un id para el archivo');
+
+    const media = { id: mediaId };
+    if (req.body?.caption && type !== 'audio' && type !== 'sticker') media.caption = String(req.body.caption);
+    if (type === 'document') media.filename = req.file.originalname;
+
+    const created = await sendOutbound({
+      tenantId: req.auth.tenantId,
+      conversationId: conversation.id,
+      message: { type, media },
+      source: 'agent',
+      userId: req.auth.userId,
+    });
+
+    // Guardamos también una copia local para que la bandeja pueda mostrar
+    // lo que el agente envió sin volver a pedirlo a Meta.
+    let withMedia = created;
+    try {
+      const ext = req.file.originalname.includes('.') ? '.' + req.file.originalname.split('.').pop() : '';
+      const key = `${req.auth.tenantId}/${created.id}${ext}`;
+      await putObject(key, req.file.buffer, req.file.mimetype);
+      withMedia = await prisma.message.update({
+        where: { id: created.id },
+        data: { mediaId, mediaStorageKey: key, mediaMimeType: req.file.mimetype, mediaFilename: req.file.originalname, mediaSizeBytes: req.file.size },
+      });
+    } catch (err) {
+      logger.warn({ err: err.message }, 'No se pudo guardar la copia local del archivo enviado');
+    }
+
+    if (conversation.botActive) {
+      await pauseBot({ tenantId: req.auth.tenantId, conversationId: conversation.id });
+    }
+
+    res.status(201).json(serializeMessage(withMedia));
+  })
+);
+
 // ---------------------------------------------------------------------------
 // Estado de la conversación
 // ---------------------------------------------------------------------------
@@ -228,13 +311,31 @@ router.patch(
 router.post(
   '/conversations/:id/read',
   asyncHandler(async (req, res) => {
-    await loadConversation(req);
+    const conversation = await loadConversation(req);
     const updated = await prisma.conversation.update({
       where: { id: req.params.id },
       data: { unreadCount: 0 },
       include: { contact: true, assignedUser: { select: { id: true, name: true } } },
     });
     res.json(serializeConversation(updated));
+
+    // Los dos checks azules para el cliente. Mejor esfuerzo: no bloquea la respuesta.
+    try {
+      const lastInbound = await prisma.message.findFirst({
+        where: { conversationId: conversation.id, direction: 'inbound', waMessageId: { not: null } },
+        orderBy: { createdAt: 'desc' },
+      });
+      const integration = lastInbound ? await resolveIntegration(conversation) : null;
+      if (lastInbound && integration) {
+        await markAsRead({
+          phoneNumberId: integration.phoneNumberId,
+          accessToken: decryptSecret(integration.accessTokenEnc),
+          waMessageId: lastInbound.waMessageId,
+        });
+      }
+    } catch (err) {
+      logger.debug({ err: err.message }, 'No se pudo marcar como leído en Meta');
+    }
   })
 );
 
@@ -308,17 +409,38 @@ router.get(
   '/contacts',
   asyncHandler(async (req, res) => {
     const q = req.query.q ? String(req.query.q) : undefined;
-    const items = await prisma.contact.findMany({
-      where: {
-        tenantId: req.auth.tenantId,
-        ...(q
-          ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { waId: { contains: q } }] }
-          : {}),
+    const tag = req.query.tag ? String(req.query.tag) : undefined;
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    const offset = Number(req.query.offset ?? 0);
+    const where = {
+      tenantId: req.auth.tenantId,
+      ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { waId: { contains: q } }] } : {}),
+      ...(tag ? { tags: { has: tag } } : {}),
+    };
+    const [items, total] = await Promise.all([
+      prisma.contact.findMany({ where, orderBy: { updatedAt: 'desc' }, take: limit, skip: offset }),
+      prisma.contact.count({ where }),
+    ]);
+    res.json({ items, total, limit, offset });
+  })
+);
+
+router.get(
+  '/contacts/:id',
+  asyncHandler(async (req, res) => {
+    const contact = await prisma.contact.findFirst({
+      where: { id: req.params.id, tenantId: req.auth.tenantId },
+      include: {
+        conversations: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          select: { id: true, status: true, pipelineStage: true, lastMessageAt: true, lastMessagePreview: true, createdAt: true },
+        },
       },
-      orderBy: { updatedAt: 'desc' },
-      take: Math.min(Number(req.query.limit ?? 50), 200),
     });
-    res.json({ items });
+    if (!contact) throw notFound('Contacto no encontrado');
+    const messages = await prisma.message.count({ where: { contactId: contact.id } });
+    res.json({ ...contact, messageCount: messages });
   })
 );
 

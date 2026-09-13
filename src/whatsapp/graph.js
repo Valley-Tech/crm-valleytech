@@ -70,7 +70,11 @@ export async function graphRequest({ method = 'GET', path, accessToken, data, pa
         data,
         params: query,
         timeout,
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          // Con FormData axios calcula el boundary solo; no hay que fijar el Content-Type.
+          ...(typeof FormData !== 'undefined' && data instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+        },
       });
       return response.data;
     } catch (rawError) {

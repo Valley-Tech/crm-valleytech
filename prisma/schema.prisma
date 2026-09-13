@@ -60,6 +60,7 @@ enum MessageSource {
   bot
   smb_echo
   history
+  campaign
 }
 
 enum TemplateStatus {
@@ -76,6 +77,26 @@ enum UsageKind {
   template_message
 }
 
+enum CampaignStatus {
+  draft
+  scheduled
+  running
+  paused
+  completed
+  cancelled
+  failed
+}
+
+enum CampaignRecipientStatus {
+  pending
+  queued
+  sent
+  delivered
+  read
+  failed
+  skipped
+}
+
 // ---------------------------------------------------------------------------
 // Tenant: cada negocio cliente del SaaS
 // ---------------------------------------------------------------------------
@@ -85,6 +106,7 @@ model Tenant {
   slug      String   @unique
   plan      String   @default("trial")
   status    String   @default("active") // active | suspended | cancelled
+  settings  Json?
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -98,6 +120,9 @@ model Tenant {
   notes            ConversationNote[]
   usageEvents      UsageEvent[]
   auditLogs        AuditLog[]
+  quickReplies     QuickReply[]
+  campaigns        Campaign[]
+  campaignRecipients CampaignRecipient[]
 
   @@map("tenants")
 }
@@ -122,6 +147,7 @@ model User {
   sentMessages          Message[]
   notes                 ConversationNote[]
   auditLogs             AuditLog[]
+  campaigns             Campaign[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
@@ -148,11 +174,15 @@ model MetaIntegration {
   messagingTier      String?   @map("messaging_tier")
   active             Boolean   @default(true)
   onboardingMethod   String    @default("manual") @map("onboarding_method") // manual | embedded_signup
+  // En coexistencia, un eco es un mensaje enviado desde la app (humano o IA de Meta).
+  // Si true, un eco pausa el bot del Bot Gateway; con la IA de Meta debe ser false.
+  echoPausesBot      Boolean   @default(false) @map("echo_pauses_bot")
   connectedAt        DateTime  @default(now()) @map("connected_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  campaigns     Campaign[]
 
   @@index([tenantId])
   @@index([wabaId])
@@ -202,6 +232,7 @@ model Contact {
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversations Conversation[]
   messages      Message[]
+  campaignRecipients CampaignRecipient[]
 
   @@unique([tenantId, channel, waId])
   @@index([tenantId])
@@ -271,6 +302,7 @@ model Message {
   mediaSizeBytes  Int?    @map("media_size_bytes")
 
   sentByUserId String?  @map("sent_by_user_id")
+  campaignId   String?  @map("campaign_id")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -278,7 +310,9 @@ model Message {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   contact      Contact?     @relation(fields: [contactId], references: [id])
   sentByUser   User?        @relation(fields: [sentByUserId], references: [id])
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   usageEvents  UsageEvent[]
+  campaignRecipients CampaignRecipient[]
 
   @@index([conversationId, createdAt])
   @@index([tenantId, createdAt])
@@ -367,4 +401,80 @@ model AuditLog {
 
   @@index([tenantId, createdAt])
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// QuickReply: respuestas rápidas del equipo (atajo "/saludo")
+// ---------------------------------------------------------------------------
+model QuickReply {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  shortcut  String
+  title     String
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, shortcut])
+  @@map("quick_replies")
+}
+
+// ---------------------------------------------------------------------------
+// Campaign: envío masivo de una plantilla aprobada a un segmento de contactos
+// ---------------------------------------------------------------------------
+model Campaign {
+  id               String         @id @default(uuid())
+  tenantId         String         @map("tenant_id")
+  integrationId    String?        @map("integration_id")
+  name             String
+  templateName     String         @map("template_name")
+  templateLanguage String         @default("es") @map("template_language")
+  components       Json?
+  status           CampaignStatus @default(draft)
+  scheduledAt      DateTime?      @map("scheduled_at")
+  startedAt        DateTime?      @map("started_at")
+  completedAt      DateTime?      @map("completed_at")
+  totalRecipients  Int            @default(0) @map("total_recipients")
+  sentCount        Int            @default(0) @map("sent_count")
+  deliveredCount   Int            @default(0) @map("delivered_count")
+  readCount        Int            @default(0) @map("read_count")
+  failedCount      Int            @default(0) @map("failed_count")
+  createdByUserId  String?        @map("created_by_user_id")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integration MetaIntegration?    @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  createdBy   User?               @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  recipients  CampaignRecipient[]
+  messages    Message[]
+
+  @@index([tenantId, status])
+  @@map("campaigns")
+}
+
+model CampaignRecipient {
+  id           String                  @id @default(uuid())
+  campaignId   String                  @map("campaign_id")
+  tenantId     String                  @map("tenant_id")
+  contactId    String                  @map("contact_id")
+  waId         String                  @map("wa_id")
+  params       Json?
+  status       CampaignRecipientStatus @default(pending)
+  messageId    String?                 @map("message_id")
+  errorMessage String?                 @map("error_message")
+  sentAt       DateTime?               @map("sent_at")
+  createdAt    DateTime                @default(now()) @map("created_at")
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  message  Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, contactId])
+  @@index([campaignId, status])
+  @@index([messageId])
+  @@map("campaign_recipients")
 }
