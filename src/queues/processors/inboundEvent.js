@@ -221,7 +221,7 @@ async function handleIncomingMessage(integration, value, incoming, options = {})
       message,
       integration,
     });
-    await dispatchToBots({ tenantId, channel, payload });
+    await dispatchToBots({ tenantId, channel, payload, integrationId: integration.id });
   }
 
   return { messageId: message.id };

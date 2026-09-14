@@ -190,6 +190,7 @@ model MetaIntegration {
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversations Conversation[]
   campaigns     Campaign[]
+  bots          BotIntegration[]
 
   @@index([tenantId])
   @@index([wabaId])
@@ -206,6 +207,8 @@ model BotIntegration {
   name           String
   channel        Channel  @default(whatsapp)
   endpointUrl    String   @map("endpoint_url")
+  // Número que atiende este bot. null = recibe los mensajes de todos los números del tenant.
+  metaIntegrationId String? @map("meta_integration_id")
   signingSecret  String   @map("signing_secret") // cifrado
   apiKeyHash     String   @unique @map("api_key_hash")
   apiKeyPrefix   String   @map("api_key_prefix")
@@ -214,7 +217,8 @@ model BotIntegration {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  metaIntegration MetaIntegration? @relation(fields: [metaIntegrationId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, channel, active])
   @@map("bot_integrations")

@@ -8,11 +8,22 @@ export default function Bots() {
   const { config } = useAuth();
   const toast = useToast();
   const [items, setItems] = useState(null);
+  const [numbers, setNumbers] = useState([]);
   const [creating, setCreating] = useState(false);
   const [creds, setCreds] = useState(null);
 
   const load = useCallback(() => get('/api/bots').then((d) => setItems(d.items)).catch((e) => toast(e.message, { error: true })), [toast]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { get('/api/integrations').then((d) => setNumbers(d.items)).catch(() => setNumbers([])); }, []);
+
+  const numberLabel = (id) => {
+    if (!id) return 'todos los números';
+    const n = numbers.find((x) => x.id === id);
+    return n ? `${n.displayPhoneNumber || n.phoneNumberId} · ${n.verifiedName || ''}` : id;
+  };
+  async function assign(bot, metaIntegrationId) {
+    try { const u = await patch(`/api/bots/${bot.id}`, { metaIntegrationId: metaIntegrationId || null }); setItems((l) => l.map((b) => (b.id === u.id ? u : b))); } catch (err) { toast(err.message, { error: true }); }
+  }
 
   async function toggle(bot, active) {
     try { const u = await patch(`/api/bots/${bot.id}`, { active }); setItems((l) => l.map((b) => (b.id === u.id ? u : b))); } catch (err) { toast(err.message, { error: true }); }
@@ -38,12 +49,18 @@ export default function Bots() {
       ) : (
         <div className="card table-wrap">
           <table className="table">
-            <thead><tr><th>Nombre</th><th>Endpoint</th><th>API key</th><th>Último despacho</th><th>Activo</th><th></th></tr></thead>
+            <thead><tr><th>Nombre</th><th>Endpoint</th><th>Atiende</th><th>API key</th><th>Último despacho</th><th>Activo</th><th></th></tr></thead>
             <tbody>
               {items.map((b) => (
                 <tr key={b.id}>
                   <td>{b.name} <Badge>{b.channel}</Badge></td>
                   <td className="mono small">{b.endpointUrl}</td>
+                  <td>
+                    <select className="input small" value={b.metaIntegrationId ?? ''} onChange={(e) => assign(b, e.target.value)} title={numberLabel(b.metaIntegrationId)}>
+                      <option value="">Todos los números</option>
+                      {numbers.map((n) => <option key={n.id} value={n.id}>{n.displayPhoneNumber || n.phoneNumberId} · {n.verifiedName || ''}</option>)}
+                    </select>
+                  </td>
                   <td className="mono small">{b.apiKeyPrefix}…</td>
                   <td className="small">{fmtDateTime(b.lastDispatchAt)}</td>
                   <td><Switch on={b.active} onChange={(v) => toggle(b, v)} /></td>
@@ -60,30 +77,37 @@ export default function Bots() {
         <ol className="small muted" style={{ paddingLeft: 18, marginTop: 8 }}>
           <li>Regístralo aquí con la URL donde recibirá los eventos (por ejemplo <code>https://tu-bot.up.railway.app/crm/events</code>).</li>
           <li>Guarda la API key y el secreto de firma en las variables del bot: <code>CRM_API_KEY</code>, <code>CRM_SIGNING_SECRET</code>, <code>CRM_BASE_URL={config?.publicUrl}</code>.</li>
-          <li>Usa <code>examples/bot-adapter.js</code> del repositorio: verifica la firma, recibe el evento y responde con <code>POST /api/v1/bot/messages</code>.</li>
+          <li>Elige en "Atiende" qué número responde ese bot: así ValleyTechBot solo recibe los chats de su número y Samuelito los del suyo.</li>
+          <li>Para ValleyTechBot y los bots hechos con la misma plantilla, copia los 4 archivos de <code>examples/valleytechbot/</code>; para otros, <code>examples/bot-adapter.js</code>.</li>
           <li>Guarda el estado conversacional en <code>botState</code>: el CRM lo devuelve en cada evento y no se pierde al desplegar.</li>
         </ol>
       </div>
 
-      {creating ? <BotModal onClose={() => setCreating(false)} onDone={(r) => { setCreating(false); setCreds({ name: r.name, ...r.credentials }); load(); }} /> : null}
+      {creating ? <BotModal numbers={numbers} onClose={() => setCreating(false)} onDone={(r) => { setCreating(false); setCreds({ name: r.name, ...r.credentials }); load(); }} /> : null}
       {creds ? <CredsModal creds={creds} onClose={() => setCreds(null)} /> : null}
     </>
   );
 }
 
-function BotModal({ onClose, onDone }) {
+function BotModal({ numbers, onClose, onDone }) {
   const toast = useToast();
-  const [form, setForm] = useState({ name: '', endpointUrl: '', channel: 'whatsapp' });
+  const [form, setForm] = useState({ name: '', endpointUrl: '', channel: 'whatsapp', metaIntegrationId: '' });
   const [busy, setBusy] = useState(false);
   async function submit(e) {
     e.preventDefault(); setBusy(true);
-    try { onDone(await post('/api/bots', form)); } catch (err) { toast(err.message, { error: true }); } finally { setBusy(false); }
+    try { onDone(await post('/api/bots', { ...form, metaIntegrationId: form.metaIntegrationId || null })); } catch (err) { toast(err.message, { error: true }); } finally { setBusy(false); }
   }
   return (
     <Modal title="Registrar chatbot" onClose={onClose}>
       <form className="col" style={{ gap: 12 }} onSubmit={submit}>
         <Field label="Nombre"><input className="input" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} required minLength={2} /></Field>
         <Field label="URL del endpoint" hint="Debe ser https y responder 200 rápido"><input className="input mono" type="url" value={form.endpointUrl} onChange={(e) => setForm((f) => ({ ...f, endpointUrl: e.target.value }))} required /></Field>
+        <Field label="Número que atiende" hint="El bot solo recibirá los mensajes de ese número.">
+          <select className="input" value={form.metaIntegrationId} onChange={(e) => setForm((f) => ({ ...f, metaIntegrationId: e.target.value }))}>
+            <option value="">Todos los números</option>
+            {numbers.map((n) => <option key={n.id} value={n.id}>{n.displayPhoneNumber || n.phoneNumberId} · {n.verifiedName || ''}</option>)}
+          </select>
+        </Field>
         <div className="row end"><Button variant="primary" type="submit" loading={busy}>Registrar</Button></div>
       </form>
     </Modal>

@@ -155,25 +155,24 @@ function ConnectModal({ config, onClose, onDone }) {
     try {
       const FB = await loadFacebookSdk(config.metaAppId, config.metaGraphVersion);
       setState({ step: 'dialog', detail: 'Completa el registro en la ventana de Meta…' });
+      // El SDK de Meta exige un callback "function" normal: si se le pasa una
+      // función async responde "Expression is of type asyncfunction, not function".
+      const onLogin = (response) => {
+        const code = response?.authResponse?.code;
+        if (!code) { setState({ step: 'idle', detail: 'El diálogo se cerró sin completar el registro.' }); return; }
+        setState({ step: 'exchange', detail: 'Conectando el número al CRM…' });
+        const s = sessionRef.current;
+        post('/api/integrations/meta/embedded-signup', {
+          code,
+          wabaId: s.waba_id,
+          phoneNumberId: s.phone_number_id,
+          coexistence: Boolean(s.coexistence || coexistence),
+        })
+          .then((integration) => { toast(`Número ${integration.displayPhoneNumber || ''} conectado`); onDone(); })
+          .catch((err) => setState({ step: 'error', detail: err.message }));
+      };
       FB.login(
-        async (response) => {
-          const code = response?.authResponse?.code;
-          if (!code) { setState({ step: 'idle', detail: 'El diálogo se cerró sin completar el registro.' }); return; }
-          setState({ step: 'exchange', detail: 'Conectando el número al CRM…' });
-          try {
-            const s = sessionRef.current;
-            const integration = await post('/api/integrations/meta/embedded-signup', {
-              code,
-              wabaId: s.waba_id,
-              phoneNumberId: s.phone_number_id,
-              coexistence: Boolean(s.coexistence || coexistence),
-            });
-            toast(`Número ${integration.displayPhoneNumber || ''} conectado`);
-            onDone();
-          } catch (err) {
-            setState({ step: 'error', detail: err.message });
-          }
-        },
+        onLogin,
         {
           config_id: config.embeddedSignupConfigId,
           response_type: 'code',

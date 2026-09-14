@@ -378,6 +378,7 @@ function serializeBot(bot) {
     name: bot.name,
     channel: bot.channel,
     endpointUrl: bot.endpointUrl,
+    metaIntegrationId: bot.metaIntegrationId ?? null,
     apiKeyPrefix: bot.apiKeyPrefix,
     active: bot.active,
     lastDispatchAt: bot.lastDispatchAt,
@@ -408,8 +409,14 @@ router.post(
         name: z.string().min(2).max(80),
         endpointUrl: z.string().url(),
         channel: z.enum(['whatsapp', 'instagram']).default('whatsapp'),
+        metaIntegrationId: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
+
+    if (input.metaIntegrationId) {
+      const owned = await prisma.metaIntegration.findFirst({ where: { id: input.metaIntegrationId, tenantId: req.auth.tenantId } });
+      if (!owned) throw badRequest('Ese número no pertenece a este cliente');
+    }
 
     const apiKey = generateApiKey('vtk');
     const signingSecret = crypto.randomBytes(32).toString('base64url');
@@ -420,6 +427,7 @@ router.post(
         name: input.name,
         channel: input.channel,
         endpointUrl: input.endpointUrl,
+        metaIntegrationId: input.metaIntegrationId ?? null,
         signingSecret: encryptSecret(signingSecret),
         apiKeyHash: apiKey.hash,
         apiKeyPrefix: apiKey.prefix,
@@ -477,8 +485,14 @@ router.patch(
         name: z.string().min(2).max(80).optional(),
         endpointUrl: z.string().url().optional(),
         active: z.boolean().optional(),
+        metaIntegrationId: z.string().uuid().nullable().optional(),
       })
       .parse(req.body);
+
+    if (data.metaIntegrationId) {
+      const owned = await prisma.metaIntegration.findFirst({ where: { id: data.metaIntegrationId, tenantId: req.auth.tenantId } });
+      if (!owned) throw badRequest('Ese número no pertenece a este cliente');
+    }
 
     const bot = await prisma.botIntegration.findFirst({
       where: { id: req.params.id, tenantId: req.auth.tenantId },

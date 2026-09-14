@@ -59,6 +59,8 @@ class WebhookController {
    */
   async handleCrmEvent(event) {
     if (event.event !== 'message.received' || !event.message) return;
+    // Si el bot tiene BUSINESS_PHONE, solo atiende su número (el CRM ya filtra por "Atiende", esto es doble seguro).
+    if (process.env.BUSINESS_PHONE && event.integration?.phoneNumberId && event.integration.phoneNumberId !== process.env.BUSINESS_PHONE) return;
     const { message, senderInfo } = toMetaMessage(event);
     await this.dispatch(message, senderInfo);
   }

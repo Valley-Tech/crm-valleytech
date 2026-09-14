@@ -58,9 +58,15 @@ export function buildBotEvent({ event, tenant, conversation, contact, message, i
 }
 
 /** Encola el despacho hacia todos los bots activos del tenant en ese canal. */
-export async function dispatchToBots({ tenantId, channel, payload }) {
+export async function dispatchToBots({ tenantId, channel, payload, integrationId = null }) {
+  // Cada bot atiende su número; los bots sin número asignado reciben todo.
   const bots = await prisma.botIntegration.findMany({
-    where: { tenantId, channel, active: true },
+    where: {
+      tenantId,
+      channel,
+      active: true,
+      OR: [{ metaIntegrationId: null }, ...(integrationId ? [{ metaIntegrationId: integrationId }] : [])],
+    },
   });
 
   if (bots.length === 0) return 0;
