@@ -2,6 +2,7 @@ import axios from 'axios';
 import env from '../config/env.js';
 import logger from '../lib/logger.js';
 import { appSecretProof } from '../lib/signature.js';
+import { resolveCredentials } from './credentials.js';
 
 export class MetaApiError extends Error {
   constructor(message, { status, code, subcode, details, requestId } = {}) {
@@ -29,7 +30,16 @@ export class MetaApiError extends Error {
   get isAuthError() {
     return this.status === 401 || this.code === 190;
   }
+
+  /** Meta no aceptó el appsecret_proof: el token es de otra app de Meta. */
+  get isAppSecretProofError() {
+    return /appsecret_proof/i.test(this.message ?? '');
+  }
 }
+
+export const APP_SECRET_MISMATCH_HINT =
+  'El token pertenece a otra app de Meta distinta de la del CRM. Genera el token desde la app del CRM ' +
+  '(usuario del sistema → Generar token → elige la app del CRM) o indica el App ID y el App Secret de la app dueña del token.';
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
@@ -57,12 +67,18 @@ function normalize(error) {
  * silencio: o devuelve el cuerpo de la respuesta, o lanza un MetaApiError.
  */
 export async function graphRequest({ method = 'GET', path, accessToken, data, params = {}, timeout = 20000 }) {
+  const credentials = resolveCredentials(accessToken);
   const url = `${env.META_GRAPH_URL}/${env.META_API_VERSION}/${path}`;
-  const query = { ...params, appsecret_proof: appSecretProof(accessToken) };
 
+  // appsecret_proof solo tiene sentido con el secreto de la app dueña del token.
+  // appSecret === null significa "no mandar prueba" (token de una app que no la exige).
+  let withProof = credentials.appSecret !== null;
   let lastError;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const query = withProof
+      ? { ...params, appsecret_proof: appSecretProof(credentials.accessToken, credentials.appSecret) }
+      : { ...params };
     try {
       const response = await axios({
         method,
@@ -71,7 +87,7 @@ export async function graphRequest({ method = 'GET', path, accessToken, data, pa
         params: query,
         timeout,
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${credentials.accessToken}`,
           // Con FormData axios calcula el boundary solo; no hay que fijar el Content-Type.
           ...(typeof FormData !== 'undefined' && data instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         },
@@ -79,8 +95,21 @@ export async function graphRequest({ method = 'GET', path, accessToken, data, pa
       return response.data;
     } catch (rawError) {
       lastError = normalize(rawError);
-      const retryable = lastError.isRetryable || RETRYABLE_STATUS.has(rawError.response?.status);
 
+      // El token es de otra app de Meta: se reintenta una vez sin la prueba.
+      // Funciona si esa app no tiene activado "Exigir clave secreta de la app";
+      // si la exige, el error vuelve y se explica cómo resolverlo.
+      if (withProof && lastError.isAppSecretProofError) {
+        logger.warn({ path }, 'Meta rechazó el appsecret_proof; reintentando sin prueba (token de otra app)');
+        withProof = false;
+        continue;
+      }
+      if (!withProof && lastError.isAppSecretProofError) {
+        lastError = new MetaApiError(`${lastError.message}. ${APP_SECRET_MISMATCH_HINT}`, lastError);
+        break;
+      }
+
+      const retryable = lastError.isRetryable || RETRYABLE_STATUS.has(rawError.response?.status);
       if (!retryable || attempt === MAX_ATTEMPTS) break;
 
       const waitMs = 2 ** (attempt - 1) * 1000;
@@ -94,12 +123,13 @@ export async function graphRequest({ method = 'GET', path, accessToken, data, pa
 
 /** Descarga binaria (usada para multimedia); devuelve un Buffer. */
 export async function graphDownload(url, accessToken) {
+  const credentials = resolveCredentials(accessToken);
   const response = await axios({
     method: 'GET',
     url,
     responseType: 'arraybuffer',
     timeout: 60000,
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: { Authorization: `Bearer ${credentials.accessToken}` },
   });
   return {
     buffer: Buffer.from(response.data),

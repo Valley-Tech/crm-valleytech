@@ -79,6 +79,34 @@ El CRM valida el token contra Meta antes de guardarlo, suscribe tu app a esa WAB
 almacena el token cifrado con AES-256-GCM. Cuando Meta apruebe la revisión, el mismo
 flujo existe automatizado en `POST /api/integrations/meta/embedded-signup`.
 
+### Números que viven en OTRA app de Meta
+
+Meta exige `appsecret_proof` = HMAC(token, App Secret **de la app dueña del token**).
+Si conectas un número con un token generado en otra app (el de Samuelito, por ejemplo)
+y el CRM usa su propio `META_APP_SECRET`, Meta responde
+`Invalid appsecret_proof provided in the API argument`. Dos salidas:
+
+1. **Recomendada:** genera el token desde la app del CRM. En Business Manager →
+   Usuarios del sistema → tu usuario → *Generar token* → elige la app del CRM
+   (`META_APP_ID`) y los permisos `whatsapp_business_messaging` y
+   `whatsapp_business_management`. Antes, en *Asignar activos*, dale a ese usuario la
+   WABA del cliente. Con eso el token, el `appsecret_proof` y la firma de los webhooks
+   usan la misma app.
+2. Marca "El token se generó en otra app de Meta" en el formulario y pega el App ID y
+   el App Secret de esa app (`metaAppId`, `metaAppSecret` en la API). El CRM calcula
+   la prueba con ese secreto y acepta los webhooks firmados por esa app. Esa app debe
+   apuntar su webhook a `PUBLIC_URL/webhooks/meta` con el mismo `META_WEBHOOK_VERIFY_TOKEN`.
+
+### "No me llegan mensajes": diagnóstico
+
+En *Números de WhatsApp* → **Diagnosticar**, el CRM consulta a Meta y comprueba en orden:
+token válido → app dueña del token → app suscrita a la WABA (`subscribed_apps`) →
+URL del webhook de la app y campo `messages` → último webhook recibido por el CRM.
+Cada punto en rojo trae qué hacer. Abajo de la tabla se ve el último webhook aceptado,
+el último rechazado por firma y los `phone_number_id` que Meta envía pero no están
+conectados. La causa más común: el webhook de la app apunta al chatbot (ValleyTechBot)
+y no al CRM. Ver `examples/valleytechbot/` para resolverlo sin apagar el bot.
+
 ---
 
 ## Qué trae la versión 2
@@ -141,6 +169,15 @@ Meta ──(1 webhook)──> CRM ──(evento firmado)──> tu bot
                        ↑                          │
                        └────(POST /api/v1/bot/messages)
 ```
+
+### 0. Sin cambiar nada en Meta: modo espejo
+
+Mientras el webhook de la app siga apuntando al bot, el bot puede **reenviar** cada
+webhook al CRM (`POST /api/v1/bot/webhook`) y **registrar** cada mensaje que envía
+(`POST /api/v1/bot/messages/record`). La bandeja muestra contactos, entrantes y las
+respuestas del bot (Gemini incluida), y "Pausar bot" funciona porque el bot consulta
+`GET /api/v1/bot/conversations/lookup?to=<wa_id>` antes de responder. Los archivos
+listos para ValleyTechBot están en `examples/valleytechbot/`.
 
 ### 1. Registra el bot en el CRM
 

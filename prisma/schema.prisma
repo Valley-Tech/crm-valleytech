@@ -177,6 +177,13 @@ model MetaIntegration {
   // En coexistencia, un eco es un mensaje enviado desde la app (humano o IA de Meta).
   // Si true, un eco pausa el bot del Bot Gateway; con la IA de Meta debe ser false.
   echoPausesBot      Boolean   @default(false) @map("echo_pauses_bot")
+  // App de Meta dueña del token, cuando NO es la app del CRM (META_APP_ID).
+  // El App Secret se necesita para appsecret_proof y para verificar la firma
+  // de los webhooks que manda esa app.
+  metaAppId          String?   @map("meta_app_id")
+  metaAppSecretEnc   String?   @map("meta_app_secret_enc")
+  lastWebhookAt      DateTime? @map("last_webhook_at")
+  lastInboundAt      DateTime? @map("last_inbound_at")
   connectedAt        DateTime  @default(now()) @map("connected_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 

@@ -2,9 +2,9 @@ import { Router } from 'express';
 import prisma from '../../lib/prisma.js';
 import { asyncHandler } from '../../lib/http.js';
 import { badRequest } from '../../lib/errors.js';
-import { decryptSecret } from '../../lib/crypto.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { listTemplates } from '../../whatsapp/templates.js';
+import { metaCredentials } from '../../whatsapp/credentials.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -41,7 +41,7 @@ router.post(
       if (seen.has(integration.wabaId)) continue;
       seen.add(integration.wabaId);
 
-      const templates = await listTemplates(integration.wabaId, decryptSecret(integration.accessTokenEnc));
+      const templates = await listTemplates(integration.wabaId, metaCredentials(integration));
 
       for (const template of templates) {
         const status = normalize(String(template.status ?? 'PENDING').toLowerCase());

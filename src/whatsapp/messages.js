@@ -38,6 +38,9 @@ export function buildPayload(to, message) {
     case 'location':
       return { ...base, type: 'location', location: message.location };
 
+    case 'contacts':
+      return { ...base, type: 'contacts', contacts: message.contacts };
+
     default:
       throw new Error(`Tipo de mensaje no soportado: ${message.type}`);
   }

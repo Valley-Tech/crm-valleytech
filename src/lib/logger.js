@@ -7,7 +7,7 @@ const logger = pino({
     ? undefined
     : { target: 'pino-pretty', options: { colorize: true, translateTime: 'SYS:HH:MM:ss' } },
   redact: {
-    paths: ['req.headers.authorization', 'req.headers["x-bot-key"]', '*.accessToken', '*.accessTokenEnc'],
+    paths: ['req.headers.authorization', 'req.headers["x-bot-key"]', '*.accessToken', '*.accessTokenEnc', '*.metaAppSecret', '*.metaAppSecretEnc', '*.appSecret'],
     censor: '[oculto]',
   },
 });

@@ -5,7 +5,6 @@ import prisma from '../../lib/prisma.js';
 import logger from '../../lib/logger.js';
 import { asyncHandler } from '../../lib/http.js';
 import { notFound, badRequest } from '../../lib/errors.js';
-import { decryptSecret } from '../../lib/crypto.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendOutbound, serializeMessage } from '../../services/messaging.js';
 import {
@@ -20,6 +19,7 @@ import { recordAudit } from '../../services/audit.js';
 import { uploadMedia } from '../../whatsapp/media.js';
 import { markAsRead } from '../../whatsapp/messages.js';
 import { putObject } from '../../storage/index.js';
+import { metaCredentials } from '../../whatsapp/credentials.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
 
@@ -216,7 +216,7 @@ router.post(
     const type = mediaTypeFor(req.file.mimetype);
     const { mediaId } = await uploadMedia({
       phoneNumberId: integration.phoneNumberId,
-      accessToken: decryptSecret(integration.accessTokenEnc),
+      accessToken: metaCredentials(integration),
       buffer: req.file.buffer,
       mimeType: req.file.mimetype,
       filename: req.file.originalname,
@@ -329,7 +329,7 @@ router.post(
       if (lastInbound && integration) {
         await markAsRead({
           phoneNumberId: integration.phoneNumberId,
-          accessToken: decryptSecret(integration.accessTokenEnc),
+          accessToken: metaCredentials(integration),
           waMessageId: lastInbound.waMessageId,
         });
       }

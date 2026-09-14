@@ -1,10 +1,10 @@
 import path from 'node:path';
 import prisma from '../../lib/prisma.js';
 import logger from '../../lib/logger.js';
-import { decryptSecret } from '../../lib/crypto.js';
 import { downloadMedia } from '../../whatsapp/media.js';
 import { resolveIntegration } from '../../services/conversations.js';
 import { putObject } from '../../storage/index.js';
+import { metaCredentials } from '../../whatsapp/credentials.js';
 
 const EXTENSIONS = {
   'image/jpeg': '.jpg',
@@ -35,7 +35,7 @@ export default async function processMediaDownload(job) {
   const integration = await resolveIntegration(message.conversation);
   if (!integration) return { skipped: 'no_integration' };
 
-  const accessToken = decryptSecret(integration.accessTokenEnc);
+  const accessToken = metaCredentials(integration);
   const file = await downloadMedia(message.mediaId, accessToken);
 
   const extension =

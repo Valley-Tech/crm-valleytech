@@ -17,6 +17,11 @@ import {
   registerPhoneNumber,
   getPhoneNumber,
 } from '../../whatsapp/embeddedSignup.js';
+import { metaCredentials } from '../../whatsapp/credentials.js';
+import { diagnoseIntegration } from '../../services/integrationDiagnostics.js';
+import { webhookDiagnostics } from '../../services/webhookDiagnostics.js';
+import { invalidateWebhookSecrets } from '../../services/webhookSecrets.js';
+import env from '../../config/env.js';
 
 const router = Router();
 router.use(requireAuth, requireRole('admin'));
@@ -41,6 +46,11 @@ function serializeIntegration(integration) {
     echoPausesBot: integration.echoPausesBot,
     active: integration.active,
     connectedAt: integration.connectedAt,
+    // App de Meta dueña del token: la del CRM salvo que la integración tenga la suya.
+    metaAppId: integration.metaAppId ?? env.META_APP_ID,
+    ownApp: !integration.metaAppSecretEnc,
+    lastWebhookAt: integration.lastWebhookAt,
+    lastInboundAt: integration.lastInboundAt,
   };
 }
 
@@ -62,7 +72,20 @@ const manualSchema = z.object({
   displayPhoneNumber: z.string().optional(),
   isCoexistence: z.boolean().default(false),
   subscribe: z.boolean().default(true),
+  // Solo si el token NO se generó para la app del CRM (META_APP_ID).
+  metaAppId: z.string().trim().optional().or(z.literal('')),
+  metaAppSecret: z.string().trim().optional().or(z.literal('')),
 });
+
+function ownAppFields(input) {
+  const appId = input.metaAppId || null;
+  const appSecret = input.metaAppSecret || null;
+  if ((appId && !appSecret) || (!appId && appSecret)) {
+    throw badRequest('Indica el App ID y el App Secret juntos, o ninguno de los dos');
+  }
+  if (appId && appId === env.META_APP_ID) return { metaAppId: null, metaAppSecretEnc: null };
+  return { metaAppId: appId, metaAppSecretEnc: appSecret ? encryptSecret(appSecret) : null };
+}
 
 /**
  * Alta manual: el camino que funciona HOY, mientras Meta no apruebe la
@@ -81,17 +104,27 @@ router.post(
 
     // Se valida el token contra Meta antes de guardarlo: si no sirve, mejor
     // enterarse ahora que cuando llegue el primer mensaje.
+    const ownApp = ownAppFields(input);
+    const credentials = {
+      accessToken: input.accessToken,
+      appId: ownApp.metaAppId ?? env.META_APP_ID,
+      appSecret: input.metaAppSecret || env.META_APP_SECRET,
+    };
+
     let phone;
     try {
-      phone = await getPhoneNumber(input.phoneNumberId, input.accessToken);
+      phone = await getPhoneNumber(input.phoneNumberId, credentials);
     } catch (err) {
       throw badRequest(`Meta rechazó las credenciales: ${err.message}`);
     }
 
+    let subscribed = null;
     if (input.subscribe) {
       try {
-        await subscribeAppToWaba(input.wabaId, input.accessToken);
+        await subscribeAppToWaba(input.wabaId, credentials);
+        subscribed = true;
       } catch (err) {
+        subscribed = false;
         logger.warn({ err: err.message }, 'No se pudo suscribir la app a la WABA');
       }
     }
@@ -108,8 +141,10 @@ router.post(
         accessTokenEnc: encryptSecret(input.accessToken),
         isCoexistence: input.isCoexistence,
         onboardingMethod: 'manual',
+        ...ownApp,
       },
     });
+    invalidateWebhookSecrets();
 
     await recordAudit({
       tenantId: req.auth.tenantId,
@@ -120,7 +155,7 @@ router.post(
       metadata: { phoneNumberId: input.phoneNumberId, method: 'manual' },
     });
 
-    res.status(201).json(serializeIntegration(integration));
+    res.status(201).json({ ...serializeIntegration(integration), subscribed });
   })
 );
 
@@ -214,12 +249,106 @@ router.post(
     });
     if (!integration) throw notFound('Integración no encontrada');
 
-    const result = await registerPhoneNumber(
-      integration.phoneNumberId,
-      decryptSecret(integration.accessTokenEnc),
-      pin
-    );
+    const result = await registerPhoneNumber(integration.phoneNumberId, metaCredentials(integration), pin);
     res.json({ ok: true, result });
+  })
+);
+
+/** Diagnóstico completo: token, suscripción a la WABA, webhook de la app y actividad. */
+router.get(
+  '/integrations/:id/diagnose',
+  asyncHandler(async (req, res) => {
+    const integration = await prisma.metaIntegration.findFirst({
+      where: { id: req.params.id, tenantId: req.auth.tenantId },
+    });
+    if (!integration) throw notFound('Integración no encontrada');
+    res.json(await diagnoseIntegration(integration));
+  })
+);
+
+/** Vuelve a suscribir la app dueña del token a los webhooks de la WABA. */
+router.post(
+  '/integrations/:id/subscribe',
+  asyncHandler(async (req, res) => {
+    const integration = await prisma.metaIntegration.findFirst({
+      where: { id: req.params.id, tenantId: req.auth.tenantId },
+    });
+    if (!integration) throw notFound('Integración no encontrada');
+    try {
+      const result = await subscribeAppToWaba(integration.wabaId, metaCredentials(integration));
+      res.json({ ok: true, result });
+    } catch (err) {
+      throw badRequest(`Meta no aceptó la suscripción: ${err.message}`);
+    }
+  })
+);
+
+/** Reemplaza el token (y opcionalmente la app de Meta) de un número ya conectado. */
+router.post(
+  '/integrations/:id/credentials',
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({
+        accessToken: z.string().min(20).optional(),
+        metaAppId: z.string().trim().optional().or(z.literal('')),
+        metaAppSecret: z.string().trim().optional().or(z.literal('')),
+      })
+      .parse(req.body);
+    const integration = await prisma.metaIntegration.findFirst({
+      where: { id: req.params.id, tenantId: req.auth.tenantId },
+    });
+    if (!integration) throw notFound('Integración no encontrada');
+
+    const ownApp = ownAppFields(input);
+    const accessToken = input.accessToken ?? decryptSecret(integration.accessTokenEnc);
+    const credentials = {
+      accessToken,
+      appId: ownApp.metaAppId ?? env.META_APP_ID,
+      appSecret: input.metaAppSecret || env.META_APP_SECRET,
+    };
+
+    let phone;
+    try {
+      phone = await getPhoneNumber(integration.phoneNumberId, credentials);
+    } catch (err) {
+      throw badRequest(`Meta rechazó las credenciales: ${err.message}`);
+    }
+
+    const updated = await prisma.metaIntegration.update({
+      where: { id: integration.id },
+      data: {
+        ...(input.accessToken ? { accessTokenEnc: encryptSecret(input.accessToken) } : {}),
+        ...ownApp,
+        displayPhoneNumber: phone?.display_phone_number ?? integration.displayPhoneNumber,
+        verifiedName: phone?.verified_name ?? integration.verifiedName,
+        qualityRating: phone?.quality_rating ?? integration.qualityRating,
+        messagingTier: phone?.messaging_limit_tier ?? integration.messagingTier,
+      },
+    });
+    invalidateWebhookSecrets();
+
+    await recordAudit({
+      tenantId: req.auth.tenantId,
+      actorUserId: req.auth.userId,
+      action: 'integration.credentials',
+      entity: 'meta_integration',
+      entityId: integration.id,
+      metadata: { phoneNumberId: integration.phoneNumberId, metaAppId: ownApp.metaAppId },
+    });
+
+    res.json(serializeIntegration(updated));
+  })
+);
+
+/** Rastro global del webhook: último POST aceptado/rechazado y números desconocidos. */
+router.get(
+  '/integrations/webhook-status',
+  asyncHandler(async (req, res) => {
+    res.json({
+      webhookUrl: `${env.PUBLIC_URL.replace(/\/$/, '')}/webhooks/meta`,
+      appId: env.META_APP_ID,
+      ...(await webhookDiagnostics()),
+    });
   })
 );
 

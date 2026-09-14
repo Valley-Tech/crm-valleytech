@@ -3,6 +3,8 @@ import env from '../config/env.js';
 import logger from '../lib/logger.js';
 import { isValidMetaSignature } from '../lib/signature.js';
 import { inboundQueue } from '../queues/index.js';
+import { webhookSecrets } from '../services/webhookSecrets.js';
+import { noteWebhookReceived } from '../services/webhookDiagnostics.js';
 
 const router = Router();
 
@@ -34,8 +36,15 @@ router.post(
   '/webhooks/meta',
   express.raw({ type: 'application/json', limit: '5mb' }),
   async (req, res) => {
-    if (!isValidMetaSignature(req.body, req.get('X-Hub-Signature-256'))) {
-      logger.warn({ ip: req.ip }, 'Webhook con firma inválida');
+    // La firma puede venir de la app del CRM o de la app propia de algún
+    // cliente. Si no cuadra con la caché, se recargan los secretos una vez
+    // (por si se acaba de conectar un número de otra app).
+    const signature = req.get('X-Hub-Signature-256');
+    let valid = isValidMetaSignature(req.body, signature, await webhookSecrets());
+    if (!valid) valid = isValidMetaSignature(req.body, signature, await webhookSecrets({ force: true }));
+    if (!valid) {
+      logger.warn({ ip: req.ip }, 'Webhook con firma inválida (¿App Secret de otra app de Meta?)');
+      noteWebhookReceived({ rejected: 'invalid_signature' }).catch(() => {});
       return res.sendStatus(401);
     }
 
@@ -70,6 +79,7 @@ router.post(
 
       if (jobs.length > 0) await inboundQueue.addBulk(jobs);
       logger.debug({ count: jobs.length }, 'Eventos de Meta encolados');
+      noteWebhookReceived({ body, jobs: jobs.length }).catch(() => {});
     } catch (err) {
       logger.error({ err }, 'No se pudieron encolar los eventos de Meta');
     }

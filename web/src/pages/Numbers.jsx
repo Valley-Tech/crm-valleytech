@@ -34,11 +34,17 @@ export default function Numbers() {
   const toast = useToast();
   const [items, setItems] = useState(null);
   const [connecting, setConnecting] = useState(false);
+  const [diagnosing, setDiagnosing] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [webhook, setWebhook] = useState(null);
 
   const load = useCallback(() => {
     get('/api/integrations').then((d) => setItems(d.items)).catch((e) => toast(e.message, { error: true }));
   }, [toast]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    get('/api/integrations/webhook-status').then(setWebhook).catch(() => setWebhook(null));
+  }, [items]);
 
   async function update(integration, data) {
     try {
@@ -68,22 +74,34 @@ export default function Numbers() {
         <div className="card table-wrap">
           <table className="table">
             <thead>
-              <tr><th>Número</th><th>Nombre verificado</th><th>Calidad</th><th>Límite</th><th>Modo</th><th>Eco pausa bot</th><th>Activo</th><th>Conectado</th></tr>
+              <tr><th>Número</th><th>Nombre verificado</th><th>Calidad</th><th>App de Meta</th><th>Modo</th><th>Último mensaje</th><th>Eco pausa bot</th><th>Activo</th><th></th></tr>
             </thead>
             <tbody>
               {items.map((i) => (
                 <tr key={i.id}>
-                  <td><span className="mono">{i.displayPhoneNumber || i.phoneNumberId}</span><div className="tiny faint mono">{i.phoneNumberId}</div></td>
+                  <td style={{ whiteSpace: 'nowrap' }}><span className="mono">{i.displayPhoneNumber || i.phoneNumberId}</span><div className="tiny faint mono">{i.phoneNumberId}</div></td>
                   <td>{i.verifiedName || '—'}</td>
                   <td>{i.qualityRating ? <Badge tone={QUALITY[i.qualityRating] ?? ''}>{qualityLabel[i.qualityRating] ?? i.qualityRating}</Badge> : '—'}</td>
-                  <td className="mono small">{i.messagingTier ?? '—'}</td>
+                  <td>
+                    <span className="mono small">{i.metaAppId}</span>
+                    <div className="tiny faint">{i.ownApp ? 'app del CRM' : 'app propia del cliente'}</div>
+                  </td>
                   <td>
                     {i.isCoexistence ? <Badge tone="info">coexistencia</Badge> : <Badge>Cloud API</Badge>}
                     <div className="tiny faint">{i.onboardingMethod === 'embedded_signup' ? 'registro insertado' : 'manual'}</div>
                   </td>
+                  <td className="small">
+                    {i.lastInboundAt ? fmtDateTime(i.lastInboundAt) : <span className="faint">nunca</span>}
+                    <div className="tiny faint">{i.lastWebhookAt ? `webhook ${fmtDateTime(i.lastWebhookAt)}` : 'sin webhooks'}</div>
+                  </td>
                   <td><Switch on={i.echoPausesBot} onChange={(v) => update(i, { echoPausesBot: v })} /></td>
                   <td><Switch on={i.active} onChange={(v) => update(i, { active: v })} /></td>
-                  <td className="small">{fmtDateTime(i.connectedAt)}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <div className="row" style={{ gap: 6 }}>
+                      <Button size="sm" onClick={() => setDiagnosing(i)}>Diagnosticar</Button>
+                      <Button size="sm" onClick={() => setEditing(i)}>Credenciales</Button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -95,7 +113,11 @@ export default function Numbers() {
         <strong>Eco pausa bot:</strong> en un número en coexistencia, cada mensaje enviado desde la app de WhatsApp Business (por una persona o por la IA de Meta) llega como <em>eco</em>. Si activas esta opción, ese eco pausa el chatbot conectado por el Bot Gateway en esa conversación. Déjala apagada si el número usa la IA de Meta.
       </div>
 
+      {webhook ? <WebhookStatus webhook={webhook} items={items ?? []} /> : null}
+
       {connecting ? <ConnectModal config={config} onClose={() => setConnecting(false)} onDone={() => { setConnecting(false); load(); }} /> : null}
+      {diagnosing ? <DiagnoseModal integration={diagnosing} onClose={() => setDiagnosing(null)} onChanged={load} /> : null}
+      {editing ? <CredentialsModal integration={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load(); }} /> : null}
     </>
   );
 }
@@ -213,7 +235,8 @@ function ConnectModal({ config, onClose, onDone }) {
 /* ========================================================================== */
 function ManualForm({ onDone }) {
   const toast = useToast();
-  const [form, setForm] = useState({ wabaId: '', phoneNumberId: '', accessToken: '', isCoexistence: false });
+  const [form, setForm] = useState({ wabaId: '', phoneNumberId: '', accessToken: '', isCoexistence: false, metaAppId: '', metaAppSecret: '' });
+  const [ownApp, setOwnApp] = useState(false);
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
 
@@ -221,8 +244,9 @@ function ManualForm({ onDone }) {
     e.preventDefault();
     setBusy(true);
     try {
-      const integration = await post('/api/integrations/meta', form);
-      toast(`Número ${integration.displayPhoneNumber || ''} conectado`);
+      const payload = ownApp ? form : { ...form, metaAppId: '', metaAppSecret: '' };
+      const integration = await post('/api/integrations/meta', payload);
+      toast(`Número ${integration.displayPhoneNumber || ''} conectado${integration.subscribed === false ? ' (no se pudo suscribir el webhook: usa Diagnosticar)' : ''}`);
       onDone();
     } catch (err) {
       toast(err.message, { error: true });
@@ -236,7 +260,141 @@ function ManualForm({ onDone }) {
       <Field label="Phone Number ID"><input className="input mono" value={form.phoneNumberId} onChange={set('phoneNumberId')} required /></Field>
       <Field label="Token de acceso" hint="Se valida contra Meta y se guarda cifrado. No se vuelve a mostrar."><input className="input mono" type="password" value={form.accessToken} onChange={set('accessToken')} required /></Field>
       <label className="checkbox"><input type="checkbox" checked={form.isCoexistence} onChange={set('isCoexistence')} /> <span className="small">Este número también se usa desde la app de WhatsApp Business (coexistencia)</span></label>
+      <OwnAppFields ownApp={ownApp} setOwnApp={setOwnApp} form={form} set={set} />
       <div className="row end"><Button variant="primary" type="submit" loading={busy}>Conectar</Button></div>
     </form>
+  );
+}
+
+/* ========================================================================== */
+function OwnAppFields({ ownApp, setOwnApp, form, set }) {
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      <label className="checkbox"><input type="checkbox" checked={ownApp} onChange={(e) => setOwnApp(e.target.checked)} /> <span className="small">El token se generó en <strong>otra app de Meta</strong> (no la del CRM)</span></label>
+      {ownApp ? (
+        <div className="callout info small">
+          Meta calcula el <code>appsecret_proof</code> con el App Secret de la app dueña del token. Si el token es de otra app, el CRM necesita su App ID y App Secret (Meta for Developers → esa app → Configuración → Básica). Lo recomendable es generar el token desde la app del CRM y no marcar esta casilla.
+        </div>
+      ) : null}
+      {ownApp ? (
+        <div className="row" style={{ gap: 10 }}>
+          <Field label="App ID de esa app"><input className="input mono" value={form.metaAppId} onChange={set('metaAppId')} required /></Field>
+          <Field label="App Secret de esa app" hint="Se guarda cifrado."><input className="input mono" type="password" value={form.metaAppSecret} onChange={set('metaAppSecret')} required /></Field>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ========================================================================== */
+function CredentialsModal({ integration, onClose, onDone }) {
+  const toast = useToast();
+  const [form, setForm] = useState({ accessToken: '', metaAppId: integration.ownApp ? '' : integration.metaAppId, metaAppSecret: '' });
+  const [ownApp, setOwnApp] = useState(!integration.ownApp);
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const payload = {
+        ...(form.accessToken ? { accessToken: form.accessToken } : {}),
+        metaAppId: ownApp ? form.metaAppId : '',
+        metaAppSecret: ownApp ? form.metaAppSecret : '',
+      };
+      await post(`/api/integrations/${integration.id}/credentials`, payload);
+      toast('Credenciales actualizadas');
+      onDone();
+    } catch (err) { toast(err.message, { error: true }); } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal title={`Credenciales de ${integration.displayPhoneNumber || integration.phoneNumberId}`} onClose={onClose}>
+      <form className="col" style={{ gap: 12 }} onSubmit={submit}>
+        <p className="small muted">Cambia el token de acceso (por ejemplo, por uno nuevo de usuario del sistema) o indica la app de Meta a la que pertenece. Se valida contra Meta antes de guardar.</p>
+        <Field label="Nuevo token de acceso" hint="Déjalo vacío para conservar el actual."><input className="input mono" type="password" value={form.accessToken} onChange={set('accessToken')} /></Field>
+        <OwnAppFields ownApp={ownApp} setOwnApp={setOwnApp} form={form} set={set} />
+        <div className="row end"><Button variant="primary" type="submit" loading={busy}>Guardar</Button></div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ========================================================================== */
+const LEVEL_TONE = { ok: 'ok', warn: 'warn', error: 'crit' };
+
+function DiagnoseModal({ integration, onClose, onChanged }) {
+  const toast = useToast();
+  const [report, setReport] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = useCallback(() => {
+    setReport(null); setError(null);
+    get(`/api/integrations/${integration.id}/diagnose`).then(setReport).catch((e) => setError(e.message));
+  }, [integration.id]);
+  useEffect(() => { run(); }, [run]);
+
+  async function subscribe() {
+    setBusy(true);
+    try {
+      await post(`/api/integrations/${integration.id}/subscribe`, {});
+      toast('App suscrita a los webhooks de la WABA');
+      run(); onChanged();
+    } catch (err) { toast(err.message, { error: true }); } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal title={`Diagnóstico de ${integration.displayPhoneNumber || integration.phoneNumberId}`} onClose={onClose} wide>
+      {error ? <div className="callout crit small">{error}</div> : null}
+      {!report && !error ? <Loading label="Consultando a Meta…" /> : null}
+      {report ? (
+        <div className="col" style={{ gap: 12 }}>
+          <div className={`callout ${report.healthy ? '' : 'warn'} small`}>
+            {report.healthy ? 'Todo en orden del lado de Meta. Si aun así no llegan mensajes, escribe al número desde un celular y vuelve a diagnosticar.' : 'Hay comprobaciones en rojo: corrige la primera y vuelve a diagnosticar.'}
+            <div className="tiny faint" style={{ marginTop: 4 }}>App: <span className="mono">{report.appId}</span> · Webhook esperado: <span className="mono">{report.expectedWebhookUrl}</span></div>
+          </div>
+          <div className="col" style={{ gap: 8 }}>
+            {report.checks.map((c) => (
+              <div key={c.id} className="card pad" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 10, alignItems: 'start' }}>
+                <Badge tone={LEVEL_TONE[c.level] ?? ''}>{c.level === 'ok' ? 'ok' : c.level === 'warn' ? 'aviso' : 'error'}</Badge>
+                <div>
+                  <div><strong>{c.title}</strong></div>
+                  <div className="small muted" style={{ wordBreak: 'break-word' }}>{c.detail}</div>
+                  {c.fix ? <div className="small" style={{ marginTop: 4 }}>→ {c.fix}</div> : null}
+                  {c.id === 'subscribed' && !c.ok ? <div style={{ marginTop: 8 }}><Button size="sm" variant="primary" loading={busy} onClick={subscribe}>Suscribir webhooks</Button></div> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <Button onClick={run}><I.refresh /> Volver a diagnosticar</Button>
+            <Button loading={busy} onClick={subscribe}>Suscribir webhooks</Button>
+          </div>
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
+/* ========================================================================== */
+function WebhookStatus({ webhook, items }) {
+  const known = new Set(items.map((i) => i.phoneNumberId));
+  const unknown = (webhook.unknownPhoneNumbers ?? []).filter((u) => !known.has(u.phoneNumberId));
+  return (
+    <div className="card pad small">
+      <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
+        <div><strong>Webhook del CRM:</strong> <span className="mono">{webhook.webhookUrl}</span></div>
+        <div><strong>App del CRM:</strong> <span className="mono">{webhook.appId}</span></div>
+        <div><strong>Último webhook aceptado:</strong> {webhook.lastAccepted ? `${fmtDateTime(webhook.lastAccepted.at)} (${(webhook.lastAccepted.fields ?? []).join(', ') || 'sin campos'})` : <span className="faint">ninguno todavía</span>}</div>
+        {webhook.lastRejected ? <div style={{ color: 'var(--crit)' }}><strong>Último rechazado por firma:</strong> {fmtDateTime(webhook.lastRejected.at)} — viene de una app cuyo App Secret el CRM no conoce.</div> : null}
+      </div>
+      {unknown.length ? (
+        <div className="callout warn" style={{ marginTop: 10 }}>
+          Meta está enviando eventos de números que <strong>no están conectados</strong> en este CRM: {unknown.map((u) => <span key={u.phoneNumberId} className="mono">{u.phoneNumberId} </span>)}. Conéctalos con "Conectar número" y sus mensajes empezarán a entrar.
+        </div>
+      ) : null}
+    </div>
   );
 }

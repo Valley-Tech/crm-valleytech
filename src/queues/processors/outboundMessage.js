@@ -1,6 +1,5 @@
 import prisma from '../../lib/prisma.js';
 import logger from '../../lib/logger.js';
-import { decryptSecret } from '../../lib/crypto.js';
 import { sendMessage } from '../../whatsapp/messages.js';
 import { MetaApiError } from '../../whatsapp/graph.js';
 import { resolveIntegration } from '../../services/conversations.js';
@@ -8,6 +7,7 @@ import { rankOf } from '../../services/messaging.js';
 import { recordUsage } from '../../services/usage.js';
 import { publishEvent } from '../../realtime/events.js';
 import { syncRecipientFromMessage } from '../../services/campaigns.js';
+import { metaCredentials } from '../../whatsapp/credentials.js';
 
 async function markFailed(message, { code, reason }) {
   const updated = await prisma.message.update({
@@ -60,7 +60,7 @@ export default async function processOutboundMessage(job) {
   const isLastAttempt = job.attemptsMade + 1 >= (job.opts?.attempts ?? 1);
 
   try {
-    const accessToken = decryptSecret(integration.accessTokenEnc);
+    const accessToken = metaCredentials(integration);
 
     const { waMessageId } = await sendMessage({
       phoneNumberId: integration.phoneNumberId,

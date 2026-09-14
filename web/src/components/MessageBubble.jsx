@@ -164,6 +164,16 @@ function Body({ message }) {
     if (type === 'interactive' && raw.interactive) return <InteractiveOutbound interactive={raw.interactive} />;
     if (MEDIA.has(type)) return <Media message={message} raw={null} />;
     if (type === 'location' && raw.location) return <div><I.pin /> {raw.location.name ?? `${raw.location.latitude}, ${raw.location.longitude}`}</div>;
+    if (type === 'contacts' && Array.isArray(raw.contacts)) {
+      return (
+        <div>
+          {raw.contacts.map((c, i) => (
+            <div key={i}><I.user /> {c.name?.formatted_name}{c.phones?.[0]?.phone ? ` · ${c.phones[0].phone}` : ''}</div>
+          ))}
+        </div>
+      );
+    }
+    if (type === 'reaction') return <div style={{ fontSize: '1.4rem' }}>{raw.reaction?.emoji ?? '👍'}</div>;
     return <div className="muted">[{type}]</div>;
   }
 

@@ -11,6 +11,7 @@ import {
 import { rankOf, serializeMessage } from '../../services/messaging.js';
 import { buildBotEvent, dispatchToBots } from '../../services/botGateway.js';
 import { syncRecipientFromMessage } from '../../services/campaigns.js';
+import { noteUnknownPhoneNumber, touchIntegrationActivity } from '../../services/webhookDiagnostics.js';
 
 const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
 
@@ -39,17 +40,23 @@ async function resolveIntegration({ entryId, value }) {
 }
 
 export default async function processInboundEvent(job) {
-  const { entryId, field, value } = job.data;
+  const { entryId, field, value, options = {} } = job.data;
 
   const integration = await resolveIntegration({ entryId, value });
   if (!integration) {
-    logger.warn({ entryId, field }, 'Evento de un número o WABA no registrado: se descarta');
+    const phoneNumberId = value?.metadata?.phone_number_id;
+    logger.warn({ entryId, field, phoneNumberId }, 'Evento de un número o WABA no registrado: se descarta');
+    await noteUnknownPhoneNumber(phoneNumberId, entryId).catch(() => {});
     return { skipped: 'unknown_integration' };
   }
 
+  await touchIntegrationActivity(integration.id, {
+    inbound: field === 'messages' && Array.isArray(value?.messages) && value.messages.length > 0,
+  });
+
   switch (field) {
     case 'messages':
-      return handleMessagesField(integration, value);
+      return handleMessagesField(integration, value, options);
     case 'message_template_status_update':
       return handleTemplateStatus(integration, value);
     case 'account_update':
@@ -69,14 +76,14 @@ export default async function processInboundEvent(job) {
 // ---------------------------------------------------------------------------
 // messages: trae mensajes entrantes, cambios de estado o errores
 // ---------------------------------------------------------------------------
-async function handleMessagesField(integration, value) {
+async function handleMessagesField(integration, value, options = {}) {
   if (Array.isArray(value?.statuses) && value.statuses.length > 0) {
     await handleStatuses(integration, value.statuses);
   }
 
   const results = [];
   for (const incoming of value?.messages ?? []) {
-    results.push(await handleIncomingMessage(integration, value, incoming));
+    results.push(await handleIncomingMessage(integration, value, incoming, options));
   }
   return { processed: results.length };
 }
@@ -127,7 +134,7 @@ async function handleStatuses(integration, statuses) {
   }
 }
 
-async function handleIncomingMessage(integration, value, incoming) {
+async function handleIncomingMessage(integration, value, incoming, options = {}) {
   const { tenantId, channel } = integration;
   const waId = incoming.from;
   const profileName = value?.contacts?.find((c) => c.wa_id === waId)?.profile?.name;
@@ -203,7 +210,9 @@ async function handleIncomingMessage(integration, value, incoming) {
     payload: serializeMessage(message),
   });
 
-  if (await shouldBotRespond(updatedConversation)) {
+  // options.skipBots: el evento lo reenvió un bot que ya lo está atendiendo
+  // (modo espejo), así que no se le vuelve a entregar por el Bot Gateway.
+  if (!options.skipBots && (await shouldBotRespond(updatedConversation))) {
     const payload = buildBotEvent({
       event: 'message.received',
       tenant: integration.tenant,
