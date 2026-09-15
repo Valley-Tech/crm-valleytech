@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 export function Button({ variant = '', size = '', className = '', loading = false, children, ...rest }) {
   return (
@@ -151,3 +151,71 @@ export function fmtPhone(waId) {
 export const STATUS_LABEL = { queued: 'en cola', sent: 'enviado', delivered: 'entregado', read: 'leído', failed: 'falló', received: 'recibido' };
 export const CONV_STATUS = { open: 'abierta', pending: 'pendiente', closed: 'cerrada' };
 export const STAGES = ['nuevo', 'contactado', 'calificado', 'negociacion', 'ganado', 'perdido'];
+
+/**
+ * Menú desplegable (⋮). Se cierra al hacer clic fuera o con Escape.
+ * items: [{ label, icon, onClick, danger, disabled, divider }]
+ */
+export function Menu({ trigger, items, align = 'right', label = 'Más opciones' }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown, { passive: true });
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('touchstart', onDown); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+  return (
+    <span className="menu-wrap" ref={ref}>
+      <span onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }} aria-haspopup="menu" aria-expanded={open} aria-label={label} role="button">
+        {trigger}
+      </span>
+      {open ? (
+        <div className={`menu ${align}`} role="menu" onClick={(e) => e.stopPropagation()}>
+          {items.filter(Boolean).map((it, i) =>
+            it.divider ? <div key={i} className="menu-divider" /> : (
+              <button key={i} type="button" role="menuitem" className={`menu-item ${it.danger ? 'danger' : ''}`} disabled={it.disabled} onClick={() => { setOpen(false); it.onClick?.(); }}>
+                {it.icon ? <span className="menu-icon">{it.icon}</span> : null}
+                <span>{it.label}</span>
+              </button>
+            )
+          )}
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
+/** Diálogo de confirmación (como la hoja de WhatsApp al eliminar un chat). */
+export function Confirm({ title, children, confirmLabel = 'Confirmar', danger = false, busy = false, onConfirm, onClose }) {
+  return (
+    <Modal title={title} onClose={onClose} footer={
+      <div className="row end" style={{ gap: 8 }}>
+        <Button type="button" onClick={onClose}>Cancelar</Button>
+        <Button type="button" variant={danger ? 'danger' : 'primary'} loading={busy} onClick={onConfirm}>{confirmLabel}</Button>
+      </div>
+    }>
+      <div className="small" style={{ lineHeight: 1.5 }}>{children}</div>
+    </Modal>
+  );
+}
+
+/** true cuando la ventana cumple el media query (para decidir vistas móviles en JS). */
+export function useMediaQuery(query) {
+  const get = () => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(query).matches : false);
+  const [matches, setMatches] = useState(get);
+  useEffect(() => {
+    if (!window.matchMedia) return undefined;
+    const mq = window.matchMedia(query);
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+    mq.addEventListener ? mq.addEventListener('change', onChange) : mq.addListener(onChange);
+    return () => { mq.removeEventListener ? mq.removeEventListener('change', onChange) : mq.removeListener(onChange); };
+  }, [query]);
+  return matches;
+}
+
+export const MOBILE_QUERY = '(max-width: 860px)';

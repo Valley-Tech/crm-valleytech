@@ -267,6 +267,47 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .picker button:hover, .picker button.active { background: var(--sunk); }
 .picker .sc { font-family: var(--mono); font-size: 0.78rem; color: var(--accent); }
 
+/* Menú desplegable (⋮) */
+.menu-wrap { position: relative; display: inline-flex; }
+.menu { position: absolute; top: calc(100% + 4px); min-width: 210px; background: var(--surface); border: 1px solid var(--rule-strong); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 45; }
+.menu.right { right: 0; } .menu.left { left: 0; }
+.menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; font-size: 0.9rem; background: none; border: none; border-radius: 6px; padding: 9px 10px; color: var(--ink); cursor: pointer; }
+.menu-item:hover { background: var(--sunk); }
+.menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
+.menu-item.danger { color: var(--crit); }
+.menu-icon { display: inline-flex; color: var(--ink-faint); } .menu-item.danger .menu-icon { color: var(--crit); }
+.menu-divider { height: 1px; background: var(--rule); margin: 6px 4px; }
+.btn.icon.sm { width: 28px; height: 28px; padding: 4px; }
+
+/* Selección múltiple en la bandeja */
+.conv { position: relative; }
+.conv .name.unread, .conv .time.unread { color: var(--ink); font-weight: 700; }
+.conv .time.unread { color: var(--accent); }
+.conv.selected { background: var(--accent-soft); }
+.select-dot { width: 40px; height: 40px; display: grid; place-items: center; }
+.select-dot::before { content: ""; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--rule-strong); grid-area: 1 / 1; }
+.select-dot.on::before { background: var(--accent); border-color: var(--accent); }
+.select-dot svg { grid-area: 1 / 1; width: 14px; height: 14px; color: var(--accent-ink); stroke-width: 3; }
+.select-head { background: var(--accent-soft); }
+.select-head strong { white-space: nowrap; font-size: 0.9rem; }
+.row-menu { position: absolute; right: 8px; top: 8px; opacity: 0; transition: opacity .12s; }
+.conv:hover .row-menu, .conv:focus-within .row-menu { opacity: 1; }
+.thread-title { cursor: pointer; border-radius: 8px; padding-right: 8px; }
+.thread-title:hover { background: var(--sunk); }
+.panel-action { display: flex; align-items: center; gap: 10px; width: 100%; font: inherit; background: none; border: none; padding: 10px 6px; border-radius: 6px; color: var(--ink); cursor: pointer; text-align: left; }
+.panel-action:hover { background: var(--sunk); }
+.panel-action.danger { color: var(--crit); }
+.mobile-only { display: none; }
+
+/* Barra inferior y hoja "Más" (solo móvil) */
+.tabbar { display: none; }
+.sheet-backdrop { position: fixed; inset: 0; background: rgba(10, 14, 11, 0.45); z-index: 60; display: flex; align-items: flex-end; }
+.sheet { width: 100%; background: var(--surface); border-radius: 16px 16px 0 0; padding: 8px 12px calc(12px + env(safe-area-inset-bottom)); box-shadow: var(--shadow-lg); }
+.sheet-handle { width: 40px; height: 4px; border-radius: 99px; background: var(--rule-strong); margin: 4px auto 10px; }
+.sheet-item { display: flex; align-items: center; gap: 12px; padding: 12px 10px; border-radius: 8px; color: var(--ink); font: inherit; font-size: 0.95rem; background: none; border: none; width: 100%; text-align: left; cursor: pointer; }
+.sheet-item:hover, .sheet-item.active { background: var(--sunk); }
+.sheet-item svg { width: 20px; height: 20px; color: var(--ink-soft); }
+
 /* ============================================================================
    Dashboard
    ========================================================================== */
@@ -293,14 +334,66 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 /* ============================================================================
    Responsive
    ========================================================================== */
-@media (max-width: 1100px) { .inbox { grid-template-columns: 300px 1fr; } .contact-panel { display: none; } .inbox.show-panel .contact-panel { display: flex; position: fixed; right: 0; top: 0; bottom: 0; width: min(340px, 92vw); z-index: 40; box-shadow: var(--shadow-lg); } }
+@media (max-width: 1100px) {
+  .inbox { grid-template-columns: 300px 1fr; }
+  .contact-panel { display: none; }
+  .inbox.show-panel .contact-panel { display: flex; position: fixed; right: 0; top: 0; bottom: 0; width: min(360px, 92vw); z-index: 40; box-shadow: var(--shadow-lg); border-left: 1px solid var(--rule); }
+}
+
+/* ---------------------------------------------------------------- móvil */
 @media (max-width: 860px) {
-  .shell { grid-template-columns: 1fr; }
+  :root { --tabbar-h: 58px; }
+  html, body, #root { height: 100%; }
+  .shell { grid-template-columns: 1fr; height: 100dvh; }
   .sidebar { display: none; }
-  .mobile-nav { display: flex; gap: 4px; overflow-x: auto; padding: 8px 12px; border-bottom: 1px solid var(--rule); background: var(--surface); }
-  .mobile-nav a { padding: 6px 10px; border-radius: 6px; white-space: nowrap; font-size: 0.85rem; color: var(--ink-soft); }
-  .mobile-nav a.active { background: var(--accent-soft); color: var(--accent); }
-  .inbox { grid-template-columns: 1fr; }
-  .inbox .conv-list.hide-mobile, .inbox .thread.hide-mobile { display: none; }
-  .page { padding: 16px; }
+  .mobile-only { display: inline; }
+  .desktop-only { display: none !important; }
+  .main { min-height: 0; }
+  .shell.has-tabbar .main { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
+  .topbar { padding: 12px 16px; position: sticky; top: 0; z-index: 5; }
+  .topbar h1 { font-size: 1.2rem; }
+  .page { padding: 14px 14px 24px; }
+  .page-head { flex-direction: column; align-items: stretch; }
+  .page-head .btn { width: 100%; justify-content: center; }
+  .card.pad { padding: 14px; }
+  .table { font-size: 0.86rem; } .table th, .table td { padding: 8px 10px; }
+  .modal-backdrop { padding: 0; align-items: flex-end; }
+  .modal, .modal.wide { max-width: none; width: 100%; max-height: 94dvh; border-radius: 16px 16px 0 0; border-bottom: none; }
+  .modal-head { padding: 14px 16px; } .modal-body { padding: 16px; } .modal-foot { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }
+  .toasts { bottom: calc(var(--tabbar-h) + 14px + env(safe-area-inset-bottom)); }
+
+  .tabbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); background: var(--surface); border-top: 1px solid var(--rule); z-index: 30; }
+  .tabbar a { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 0.66rem; color: var(--ink-soft); padding: 6px 2px; min-width: 0; white-space: nowrap; }
+  .tabbar a svg { width: 22px; height: 22px; }
+  .tabbar a.active { color: var(--accent); }
+
+  /* Bandeja: una sola vista a la vez (lista → chat → info del contacto) */
+  .inbox, .inbox.no-panel, .inbox.show-panel { display: block; height: 100%; min-height: 0; }
+  .inbox .pane { height: 100%; }
+  .inbox .pane + .pane { border-left: none; }
+  .inbox .conv-list, .inbox .thread, .inbox .contact-panel { display: none; }
+  .inbox.mobile-list .conv-list { display: flex; }
+  .inbox.mobile-thread .thread { display: flex; }
+  .inbox.mobile-contact .contact-panel { display: flex; position: static; width: auto; box-shadow: none; }
+  .pane-head { padding: 10px 12px; position: sticky; top: 0; z-index: 4; }
+  .conv { padding: 12px 12px; grid-template-columns: 44px 1fr; }
+  .conv .name { font-size: 1rem; } .conv .preview { font-size: 0.88rem; }
+  .row-menu { display: none; }
+  .thread-head { padding: 6px 8px; gap: 6px; }
+  .thread-title { padding-right: 4px; }
+  .messages { padding: 12px 10px 6px; }
+  .msg { max-width: 88%; font-size: 0.95rem; }
+  .composer { padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); }
+  .composer .tools .btn:nth-child(3) { display: none; }
+  .composer #send-btn { padding: 8px 12px; }
+  .composer .send-label { display: none; }
+  .contact-panel .section { padding: 14px 16px; }
+  .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; }
+}
+
+@media (max-width: 400px) {
+  .tabbar a { font-size: 0.6rem; }
+  .msg { max-width: 92%; }
 }

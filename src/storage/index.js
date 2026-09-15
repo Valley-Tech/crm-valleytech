@@ -62,3 +62,20 @@ export async function getObject(key) {
 
   return fs.readFile(path.resolve(env.STORAGE_LOCAL_DIR, key));
 }
+
+/** Borra un archivo; nunca lanza (un archivo que ya no está no debe frenar un borrado). */
+export async function deleteObject(key) {
+  try {
+    if (env.STORAGE_DRIVER === 's3') {
+      const { DeleteObjectCommand } = await loadS3Sdk();
+      const client = await getS3();
+      await client.send(new DeleteObjectCommand({ Bucket: env.S3_BUCKET, Key: key }));
+    } else {
+      await fs.rm(path.resolve(env.STORAGE_LOCAL_DIR, key), { force: true });
+    }
+    return true;
+  } catch (err) {
+    logger.warn({ key, err: err.message }, 'No se pudo borrar el archivo');
+    return false;
+  }
+}

@@ -26,4 +26,13 @@ export const I = {
   plus: () => <svg {...base}><path d="M12 5v14M5 12h14" /></svg>,
   refresh: () => <svg {...base}><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v6h-6" /></svg>,
   logout: () => <svg {...base}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5M21 12H9" /></svg>,
+  more: () => <svg {...base}><circle cx="12" cy="5" r="1.4" fill="currentColor" /><circle cx="12" cy="12" r="1.4" fill="currentColor" /><circle cx="12" cy="19" r="1.4" fill="currentColor" /></svg>,
+  trash: () => <svg {...base}><path d="M4 7h16" /><path d="M10 11v6M14 11v6" /><path d="M6 7l1 13h10l1-13" /><path d="M9 7V4h6v3" /></svg>,
+  broom: () => <svg {...base}><path d="M14 3l7 7" /><path d="M10.5 6.5 17.5 13.5" /><path d="M4 21c0-5 2.5-8 6.5-9.5l3 3C12 18.5 9 21 4 21z" /></svg>,
+  info: () => <svg {...base}><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>,
+  close: () => <svg {...base}><path d="M6 6l12 12M18 6 6 18" /></svg>,
+  search: () => <svg {...base}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>,
+  menu: () => <svg {...base}><path d="M4 7h16M4 12h16M4 17h16" /></svg>,
+  archive: () => <svg {...base}><path d="M3 5h18v4H3z" /><path d="M5 9v10h14V9" /><path d="M10 13h4" /></svg>,
+  checkSquare: () => <svg {...base}><rect x="4" y="4" width="16" height="16" rx="3" /><path d="m8 12 3 3 5-6" /></svg>,
 };

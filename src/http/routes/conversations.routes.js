@@ -18,7 +18,7 @@ import { publishEvent } from '../../realtime/events.js';
 import { recordAudit } from '../../services/audit.js';
 import { uploadMedia } from '../../whatsapp/media.js';
 import { markAsRead } from '../../whatsapp/messages.js';
-import { putObject } from '../../storage/index.js';
+import { putObject, deleteObject } from '../../storage/index.js';
 import { metaCredentials } from '../../whatsapp/credentials.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
@@ -143,6 +143,110 @@ router.get(
 
 // ---------------------------------------------------------------------------
 // Hilo de mensajes
+// ---------------------------------------------------------------------------
+// Vaciar y eliminar (como en WhatsApp)
+// ---------------------------------------------------------------------------
+
+/** Borra los archivos multimedia de una lista de mensajes (mejor esfuerzo). */
+async function deleteMediaFiles(messages) {
+  const keys = messages.map((m) => m.mediaStorageKey).filter(Boolean);
+  await Promise.all(keys.map((key) => deleteObject(key)));
+  return keys.length;
+}
+
+/**
+ * Vaciar chat: borra todos los mensajes pero conserva la conversación, el
+ * contacto, las etiquetas, las notas y la asignación. Igual que "Vaciar chat"
+ * en WhatsApp. La ventana de 24 h se mantiene (depende del último entrante).
+ */
+router.post(
+  '/conversations/:id/clear',
+  requireRole('agent'),
+  asyncHandler(async (req, res) => {
+    const conversation = await loadConversation(req);
+    const messages = await prisma.message.findMany({
+      where: { conversationId: conversation.id, tenantId: req.auth.tenantId },
+      select: { id: true, mediaStorageKey: true },
+    });
+    const files = await deleteMediaFiles(messages);
+    const deleted = await prisma.message.deleteMany({ where: { conversationId: conversation.id, tenantId: req.auth.tenantId } });
+
+    const updated = await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { lastMessagePreview: null, unreadCount: 0 },
+      include: { contact: true, assignedUser: { select: { id: true, name: true } }, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
+    });
+
+    await recordAudit({
+      tenantId: req.auth.tenantId,
+      actorUserId: req.auth.userId,
+      action: 'conversation.clear',
+      entity: 'conversation',
+      entityId: conversation.id,
+      metadata: { messages: deleted.count, files },
+    });
+    await publishEvent({ tenantId: req.auth.tenantId, conversationId: conversation.id, type: 'conversation:cleared', payload: { id: conversation.id } });
+
+    res.json({ ...serializeConversation(updated), deletedMessages: deleted.count });
+  })
+);
+
+async function deleteConversations(req, ids) {
+  const conversations = await prisma.conversation.findMany({
+    where: { id: { in: ids }, tenantId: req.auth.tenantId },
+    select: { id: true },
+  });
+  const found = conversations.map((c) => c.id);
+  if (found.length === 0) return { deleted: 0, files: 0 };
+
+  const messages = await prisma.message.findMany({
+    where: { conversationId: { in: found }, tenantId: req.auth.tenantId, mediaStorageKey: { not: null } },
+    select: { id: true, mediaStorageKey: true },
+  });
+  const files = await deleteMediaFiles(messages);
+  // Mensajes y notas se borran en cascada (FK ON DELETE CASCADE).
+  const result = await prisma.conversation.deleteMany({ where: { id: { in: found }, tenantId: req.auth.tenantId } });
+
+  await recordAudit({
+    tenantId: req.auth.tenantId,
+    actorUserId: req.auth.userId,
+    action: 'conversation.delete',
+    entity: 'conversation',
+    entityId: found.length === 1 ? found[0] : null,
+    metadata: { ids: found, files },
+  });
+  for (const id of found) {
+    await publishEvent({ tenantId: req.auth.tenantId, conversationId: id, type: 'conversation:deleted', payload: { id } });
+  }
+  return { deleted: result.count, files };
+}
+
+/**
+ * Eliminar chat: borra la conversación con sus mensajes y notas. El contacto
+ * se conserva (como en WhatsApp: borrar un chat no borra el contacto). Si el
+ * cliente vuelve a escribir, se abre una conversación nueva.
+ */
+router.delete(
+  '/conversations/:id',
+  requireRole('agent'),
+  asyncHandler(async (req, res) => {
+    await loadConversation(req);
+    const result = await deleteConversations(req, [req.params.id]);
+    res.json({ ok: true, ...result });
+  })
+);
+
+/** Eliminar varias a la vez (selección múltiple en la bandeja). */
+router.post(
+  '/conversations/bulk-delete',
+  requireRole('agent'),
+  asyncHandler(async (req, res) => {
+    const { ids } = z.object({ ids: z.array(z.string().uuid()).min(1).max(200) }).parse(req.body);
+    const result = await deleteConversations(req, ids);
+    res.json({ ok: true, ...result });
+  })
+);
+
 // ---------------------------------------------------------------------------
 router.get(
   '/conversations/:id/messages',

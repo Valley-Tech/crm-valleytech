@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { get, post, patch, api } from '../api.js';
+import { get, post, patch, del, api } from '../api.js';
 import { getSocket } from '../socket.js';
 import { useRouter } from '../router.jsx';
 import { useAuth, useToast, hasRole } from '../store.jsx';
-import { Avatar, Badge, Button, Chips, Empty, Loading, Switch, fmtTime, fmtDateTime, fmtPhone, CONV_STATUS, STAGES } from '../components/ui.jsx';
+import { Avatar, Badge, Button, Chips, Empty, Loading, Switch, Menu, Confirm, useMediaQuery, MOBILE_QUERY, fmtTime, fmtDateTime, fmtPhone, CONV_STATUS, STAGES } from '../components/ui.jsx';
 import { MessageBubble } from '../components/MessageBubble.jsx';
 import { TemplatePicker } from '../components/TemplatePicker.jsx';
 import { I } from '../components/Icons.jsx';
@@ -50,8 +50,14 @@ export default function Inbox({ params }) {
   const [notes, setNotes] = useState([]);
   const [users, setUsers] = useState([]);
   const [quickReplies, setQuickReplies] = useState([]);
-  const [showPanel, setShowPanel] = useState(true);
+  const [showPanel, setShowPanel] = useState(true);   // escritorio: tercera columna
+  const [panelMobile, setPanelMobile] = useState(false); // móvil: info del contacto a pantalla completa
   const [bots, setBots] = useState([]);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [confirm, setConfirm] = useState(null); // { kind: 'delete' | 'clear' | 'bulk', ids, name }
+  const [busy, setBusy] = useState(false);
+  const isMobile = useMediaQuery(MOBILE_QUERY);
 
   /* ---------------- lista ---------------- */
   const loadList = useCallback(async () => {
@@ -102,6 +108,7 @@ export default function Inbox({ params }) {
   }, [toast, navigate]);
 
   useEffect(() => {
+    setPanelMobile(false);
     if (conversationId) loadThread(conversationId);
     else { setCurrent(null); setMessages([]); setNotes([]); }
   }, [conversationId, loadThread]);
@@ -127,16 +134,28 @@ export default function Inbox({ params }) {
       if (payload.id === conversationId) setCurrent((c) => (c ? { ...c, ...payload } : c));
       refreshList();
     };
+    const onDeleted = (payload) => {
+      setList((s) => ({ ...s, items: s.items.filter((c) => c.id !== payload.id), total: Math.max(0, s.total - 1) }));
+      if (payload.id === conversationId) navigate('/inbox', { replace: true });
+    };
+    const onCleared = (payload) => {
+      if (payload.id === conversationId) setMessages([]);
+      refreshList();
+    };
     socket.on('message:created', onCreated);
     socket.on('message:status', onStatus);
     socket.on('conversation:updated', onConv);
+    socket.on('conversation:deleted', onDeleted);
+    socket.on('conversation:cleared', onCleared);
     return () => {
       clearTimeout(timer);
       socket.off('message:created', onCreated);
       socket.off('message:status', onStatus);
       socket.off('conversation:updated', onConv);
+      socket.off('conversation:deleted', onDeleted);
+      socket.off('conversation:cleared', onCleared);
     };
-  }, [conversationId, loadList]);
+  }, [conversationId, loadList, navigate]);
 
   /* ---------------- acciones ---------------- */
   async function updateConversation(data) {
@@ -153,27 +172,104 @@ export default function Inbox({ params }) {
     toast(r.botActive ? 'Bot reactivado en esta conversación' : 'Bot pausado: el CRM no dejará que responda aquí');
   }
 
+  const nameOf = (c) => c?.contact?.name || fmtPhone(c?.contact?.waId) || 'este chat';
+
+  async function runConfirm() {
+    if (!confirm) return;
+    setBusy(true);
+    try {
+      if (confirm.kind === 'clear') {
+        const r = await post(`/api/conversations/${confirm.ids[0]}/clear`);
+        if (confirm.ids[0] === conversationId) { setMessages([]); setCurrent((c) => (c ? { ...c, lastMessagePreview: null } : c)); }
+        setList((s) => ({ ...s, items: s.items.map((c) => (c.id === confirm.ids[0] ? { ...c, lastMessagePreview: null, unreadCount: 0 } : c)) }));
+        toast(`Chat vaciado (${r.deletedMessages} mensajes)`);
+      } else {
+        const r = confirm.ids.length === 1
+          ? await del(`/api/conversations/${confirm.ids[0]}`)
+          : await post('/api/conversations/bulk-delete', { ids: confirm.ids });
+        const gone = new Set(confirm.ids);
+        setList((s) => ({ ...s, items: s.items.filter((c) => !gone.has(c.id)), total: Math.max(0, s.total - r.deleted) }));
+        toast(r.deleted === 1 ? 'Chat eliminado' : `${r.deleted} chats eliminados`);
+        if (gone.has(conversationId)) navigate('/inbox', { replace: true });
+        setSelectMode(false); setSelected(new Set());
+      }
+      setConfirm(null);
+    } catch (err) {
+      toast(err.message, { error: true });
+    } finally { setBusy(false); }
+  }
+
+  function toggleSelected(id) {
+    setSelected((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }
+  function startSelect(id) {
+    setSelectMode(true);
+    setSelected(new Set(id ? [id] : []));
+  }
+  function exitSelect() { setSelectMode(false); setSelected(new Set()); }
+
+  const canWrite = hasRole(user, 'agent');
   const showList = !conversationId;
+  const mobileView = !conversationId ? 'list' : panelMobile ? 'contact' : 'thread';
+  const panelVisible = Boolean(current) && (isMobile ? panelMobile : showPanel);
 
   return (
-    <div className={`inbox ${showPanel && current ? 'show-panel' : 'no-panel'}`}>
+    <div className={`inbox ${!isMobile && showPanel && current ? 'show-panel' : 'no-panel'} mobile-${mobileView}`}>
       {/* ------------------------------------------------ lista */}
       <section className={`pane conv-list ${showList ? '' : 'hide-mobile'}`}>
-        <div className="pane-head">
-          <div className="row between">
-            <h2>Bandeja</h2>
-            <span className="badge">{list.total}</span>
+        {selectMode ? (
+          <div className="pane-head select-head">
+            <div className="row between">
+              <div className="row">
+                <Button variant="ghost" className="icon" onClick={exitSelect} aria-label="Cancelar selección"><I.close /></Button>
+                <strong>{selected.size} seleccionada{selected.size === 1 ? '' : 's'}</strong>
+              </div>
+              <div className="row">
+                <Button size="sm" onClick={() => setSelected(new Set(list.items.map((c) => c.id)))}>Todas</Button>
+                <Button size="sm" variant="danger" disabled={selected.size === 0} onClick={() => setConfirm({ kind: 'bulk', ids: [...selected] })}><I.trash /> Eliminar</Button>
+              </div>
+            </div>
           </div>
-          <input id="inbox-search" className="input" type="search" placeholder="Buscar por nombre o número" value={query} onChange={(e) => setQuery(e.target.value)} />
-          <Chips value={filter} onChange={setFilter} items={FILTERS} />
-        </div>
+        ) : (
+          <div className="pane-head">
+            <div className="row between">
+              <h2>Bandeja</h2>
+              <div className="row">
+                <span className="badge">{list.total}</span>
+                {canWrite ? (
+                  <Menu
+                    trigger={<Button variant="ghost" className="icon" aria-label="Opciones de la bandeja"><I.more /></Button>}
+                    items={[
+                      { label: 'Seleccionar chats', icon: <I.checkSquare />, onClick: () => startSelect(null), disabled: list.items.length === 0 },
+                      { label: 'Actualizar', icon: <I.refresh />, onClick: loadList },
+                    ]}
+                  />
+                ) : null}
+              </div>
+            </div>
+            <input id="inbox-search" className="input" type="search" placeholder="Buscar por nombre o número" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <Chips value={filter} onChange={setFilter} items={FILTERS} />
+          </div>
+        )}
         <div className="pane-scroll">
           {list.loading ? <Loading /> : null}
           {!list.loading && list.items.length === 0 ? (
             <Empty title="Sin conversaciones">Cuando un cliente escriba a un número conectado, aparecerá aquí.</Empty>
           ) : null}
           {list.items.map((c) => (
-            <ConversationRow key={c.id} conversation={c} active={c.id === conversationId} onClick={() => navigate(`/inbox/${c.id}`)} />
+            <ConversationRow
+              key={c.id}
+              conversation={c}
+              active={c.id === conversationId}
+              selectMode={selectMode}
+              selected={selected.has(c.id)}
+              canWrite={canWrite}
+              onClick={() => (selectMode ? toggleSelected(c.id) : navigate(`/inbox/${c.id}`))}
+              onLongPress={() => canWrite && !selectMode && startSelect(c.id)}
+              onClear={() => setConfirm({ kind: 'clear', ids: [c.id], name: nameOf(c) })}
+              onDelete={() => setConfirm({ kind: 'delete', ids: [c.id], name: nameOf(c) })}
+              onSelect={() => startSelect(c.id)}
+            />
           ))}
         </div>
       </section>
@@ -189,8 +285,11 @@ export default function Inbox({ params }) {
             conversation={current}
             messages={messages}
             onBack={() => navigate('/inbox')}
-            onTogglePanel={() => setShowPanel((v) => !v)}
+            onTogglePanel={() => (isMobile ? setPanelMobile(true) : setShowPanel((v) => !v))}
             onToggleBot={toggleBot}
+            onClear={() => setConfirm({ kind: 'clear', ids: [current.id], name: nameOf(current) })}
+            onDelete={() => setConfirm({ kind: 'delete', ids: [current.id], name: nameOf(current) })}
+            isMobile={isMobile}
             hasBots={bots.length > 0}
             quickReplies={quickReplies}
             onSent={(m) => setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]))}
@@ -200,48 +299,110 @@ export default function Inbox({ params }) {
       </section>
 
       {/* ------------------------------------------------ contacto */}
-      {current && showPanel ? (
+      {panelVisible ? (
         <ContactPanel
           conversation={current}
           notes={notes}
           users={users}
           hasBots={bots.length > 0}
-          onClose={() => setShowPanel(false)}
+          mobile={isMobile}
+          onClose={() => (isMobile ? setPanelMobile(false) : setShowPanel(false))}
+          onClear={() => setConfirm({ kind: 'clear', ids: [current.id], name: nameOf(current) })}
+          onDelete={() => setConfirm({ kind: 'delete', ids: [current.id], name: nameOf(current) })}
           onUpdate={updateConversation}
           onToggleBot={toggleBot}
           onContactUpdate={(contact) => setCurrent((c) => ({ ...c, contact: { ...c.contact, ...contact } }))}
           onNoteAdded={(note) => setNotes((n) => [note, ...n])}
         />
       ) : null}
+
+      {confirm ? (
+        <Confirm
+          title={confirm.kind === 'clear' ? '¿Vaciar este chat?' : confirm.ids.length > 1 ? `¿Eliminar ${confirm.ids.length} chats?` : `¿Eliminar el chat con ${confirm.name}?`}
+          confirmLabel={confirm.kind === 'clear' ? 'Vaciar chat' : confirm.ids.length > 1 ? `Eliminar ${confirm.ids.length} chats` : 'Eliminar chat'}
+          danger
+          busy={busy}
+          onConfirm={runConfirm}
+          onClose={() => setConfirm(null)}
+        >
+          {confirm.kind === 'clear' ? (
+            <>Se borran todos los mensajes y archivos de esta conversación. Se conservan el contacto, las etiquetas, las notas internas y la asignación. Los mensajes <strong>no se borran del WhatsApp del cliente</strong>.</>
+          ) : (
+            <>Se eliminan la conversación, sus mensajes, archivos y notas internas del CRM. El contacto se conserva; si vuelve a escribir, se abrirá un chat nuevo. Esto no afecta al WhatsApp del cliente ni al historial en Meta.</>
+          )}
+        </Confirm>
+      ) : null}
     </div>
   );
 }
 
 /* ========================================================================== */
-function ConversationRow({ conversation: c, active, onClick }) {
+function ConversationRow({ conversation: c, active, selectMode, selected, canWrite, onClick, onLongPress, onClear, onDelete, onSelect }) {
   const name = c.contact?.name || fmtPhone(c.contact?.waId) || 'Sin nombre';
+  const pressTimer = useRef(null);
+  const pressed = useRef(false);
+
+  // Mantener pulsado (como en WhatsApp) entra en modo selección.
+  const startPress = () => {
+    pressed.current = false;
+    clearTimeout(pressTimer.current);
+    pressTimer.current = setTimeout(() => { pressed.current = true; onLongPress?.(); }, 500);
+  };
+  const endPress = () => clearTimeout(pressTimer.current);
+  const handleClick = () => { if (pressed.current) { pressed.current = false; return; } onClick(); };
+
   return (
-    <div className={`conv ${active ? 'active' : ''}`} onClick={onClick} role="button" tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && onClick()}>
-      <Avatar name={c.contact?.name || c.contact?.waId} />
-      <div className="grow">
+    <div
+      className={`conv ${active ? 'active' : ''} ${selected ? 'selected' : ''} ${selectMode ? 'selecting' : ''}`}
+      onClick={handleClick}
+      onTouchStart={startPress}
+      onTouchEnd={endPress}
+      onTouchMove={endPress}
+      onContextMenu={(e) => { if (canWrite) { e.preventDefault(); onLongPress?.(); } }}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => e.key === 'Enter' && onClick()}
+    >
+      {selectMode ? (
+        <span className={`select-dot ${selected ? 'on' : ''}`} aria-hidden="true">{selected ? <I.check /> : null}</span>
+      ) : (
+        <Avatar name={c.contact?.name || c.contact?.waId} />
+      )}
+      <div className="grow" style={{ minWidth: 0 }}>
         <div className="row between">
-          <span className="name truncate">{name}</span>
-          <span className="time">{fmtTime(c.lastMessageAt)}</span>
+          <span className={`name truncate ${c.unreadCount > 0 ? 'unread' : ''}`}>{name}</span>
+          <span className={`time ${c.unreadCount > 0 ? 'unread' : ''}`}>{fmtTime(c.lastMessageAt)}</span>
         </div>
-        <div className="preview truncate">{c.lastMessagePreview || '—'}</div>
-        <div className="meta">
+        <div className="row between" style={{ gap: 6 }}>
+          <div className="preview truncate">{c.lastMessagePreview || '—'}</div>
           {c.unreadCount > 0 ? <span className="badge solid">{c.unreadCount}</span> : null}
+        </div>
+        <div className="meta">
           {c.status !== 'open' ? <span className={`badge ${c.status === 'pending' ? 'warn' : ''}`}>{CONV_STATUS[c.status]}</span> : null}
           {c.assignedUser ? <span className="badge">{c.assignedUser.name.split(' ')[0]}</span> : null}
           {c.botActive ? <span className="badge accent">bot</span> : null}
         </div>
       </div>
+      {canWrite && !selectMode ? (
+        <span className="row-menu">
+          <Menu
+            trigger={<button type="button" className="btn ghost icon sm" aria-label="Opciones del chat"><I.more /></button>}
+            items={[
+              { label: 'Abrir chat', icon: <I.inbox />, onClick: onClick },
+              { label: 'Seleccionar', icon: <I.checkSquare />, onClick: onSelect },
+              { divider: true },
+              { label: 'Vaciar chat', icon: <I.broom />, onClick: onClear },
+              { label: 'Eliminar chat', icon: <I.trash />, onClick: onDelete, danger: true },
+            ]}
+          />
+        </span>
+      ) : null}
     </div>
   );
 }
 
 /* ========================================================================== */
-function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot, hasBots, quickReplies, onSent, onUpdate }) {
+function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot, onClear, onDelete, hasBots, quickReplies, onSent, onUpdate, isMobile }) {
   const { user } = useAuth();
   const toast = useToast();
   const [draft, setDraft] = useState('');
@@ -340,24 +501,40 @@ function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot,
   return (
     <>
       <div className="thread-head">
-        <div className="row" style={{ minWidth: 0 }}>
-          <button className="btn ghost icon" onClick={onBack} aria-label="Volver" style={{ display: 'inline-flex' }}><I.back /></button>
+        <div className="row thread-title" style={{ minWidth: 0 }} onClick={onTogglePanel} role="button" tabIndex={0} title="Ver info del contacto">
+          <button className="btn ghost icon" onClick={(e) => { e.stopPropagation(); onBack(); }} aria-label="Volver" style={{ display: 'inline-flex' }}><I.back /></button>
           <Avatar name={c.contact?.name || c.contact?.waId} />
           <div style={{ minWidth: 0 }}>
             <div className="truncate" style={{ fontWeight: 600 }}>{title}</div>
-            <div className="tiny faint">{fmtPhone(c.contact?.waId)} · {CONV_STATUS[c.status]} · {c.pipelineStage}</div>
+            <div className="tiny faint">
+              {isMobile ? (c.botActive ? 'bot activo' : c.botPausedUntil ? 'bot en pausa' : CONV_STATUS[c.status]) : `${fmtPhone(c.contact?.waId)} · ${CONV_STATUS[c.status]} · ${c.pipelineStage}`}
+              {isMobile ? ' · toca para ver info' : ''}
+            </div>
           </div>
         </div>
-        <div className="row">
-          {c.botActive ? <Badge tone="accent">bot activo</Badge> : c.botPausedUntil ? <Badge tone="warn">bot en pausa</Badge> : null}
-          {canWrite ? (
-            <Button size="sm" onClick={onToggleBot} title={hasBots ? '' : 'No hay chatbots conectados por el Bot Gateway'}>
-              {c.botActive ? <><I.pause /> Pausar bot</> : <><I.play /> Reactivar bot</>}
-            </Button>
-          ) : null}
-          {canWrite && c.status !== 'closed' ? <Button size="sm" onClick={() => onUpdate({ status: 'closed' })}>Cerrar</Button> : null}
-          {c.status === 'closed' && canWrite ? <Button size="sm" onClick={() => onUpdate({ status: 'open' })}>Reabrir</Button> : null}
-          <Button size="sm" variant="ghost" onClick={onTogglePanel} aria-label="Panel de contacto"><I.user /></Button>
+        <div className="row" style={{ flex: 'none' }}>
+          <span className="desktop-only row">
+            {c.botActive ? <Badge tone="accent">bot activo</Badge> : c.botPausedUntil ? <Badge tone="warn">bot en pausa</Badge> : null}
+            {canWrite ? (
+              <Button size="sm" onClick={onToggleBot} title={hasBots ? '' : 'No hay chatbots conectados por el Bot Gateway'}>
+                {c.botActive ? <><I.pause /> Pausar bot</> : <><I.play /> Reactivar bot</>}
+              </Button>
+            ) : null}
+            {canWrite && c.status !== 'closed' ? <Button size="sm" onClick={() => onUpdate({ status: 'closed' })}>Cerrar</Button> : null}
+            {c.status === 'closed' && canWrite ? <Button size="sm" onClick={() => onUpdate({ status: 'open' })}>Reabrir</Button> : null}
+            <Button size="sm" variant="ghost" className="icon" onClick={onTogglePanel} aria-label="Panel de contacto" title="Info del contacto"><I.user /></Button>
+          </span>
+          <Menu
+            trigger={<Button variant="ghost" className="icon" aria-label="Más opciones"><I.more /></Button>}
+            items={[
+              { label: 'Info del contacto', icon: <I.info />, onClick: onTogglePanel },
+              canWrite ? { label: c.botActive ? 'Pausar bot' : 'Reactivar bot', icon: c.botActive ? <I.pause /> : <I.play />, onClick: onToggleBot } : null,
+              canWrite ? { label: c.status === 'closed' ? 'Reabrir conversación' : 'Cerrar conversación', icon: <I.archive />, onClick: () => onUpdate({ status: c.status === 'closed' ? 'open' : 'closed' }) } : null,
+              canWrite ? { divider: true } : null,
+              canWrite ? { label: 'Vaciar chat', icon: <I.broom />, onClick: onClear } : null,
+              canWrite ? { label: 'Eliminar chat', icon: <I.trash />, onClick: onDelete, danger: true } : null,
+            ]}
+          />
         </div>
       </div>
 
@@ -415,7 +592,7 @@ function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot,
               onKeyDown={onKey}
               disabled={!windowOpen || sending}
             />
-            <Button id="send-btn" variant="primary" onClick={sendText} disabled={!windowOpen || !draft.trim()} loading={sending}><I.send /> Enviar</Button>
+            <Button id="send-btn" variant="primary" onClick={sendText} disabled={!windowOpen || !draft.trim()} loading={sending}><I.send /><span className="send-label"> Enviar</span></Button>
           </div>
         </div>
       ) : null}
@@ -426,7 +603,7 @@ function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot,
 }
 
 /* ========================================================================== */
-function ContactPanel({ conversation: c, notes, users, hasBots, onClose, onUpdate, onToggleBot, onContactUpdate, onNoteAdded }) {
+function ContactPanel({ conversation: c, notes, users, hasBots, mobile = false, onClose, onClear, onDelete, onUpdate, onToggleBot, onContactUpdate, onNoteAdded }) {
   const { user } = useAuth();
   const toast = useToast();
   const canWrite = hasRole(user, 'agent');
@@ -470,6 +647,14 @@ function ContactPanel({ conversation: c, notes, users, hasBots, onClose, onUpdat
 
   return (
     <aside className="pane contact-panel">
+      {mobile ? (
+        <div className="pane-head">
+          <div className="row">
+            <button className="btn ghost icon" onClick={onClose} aria-label="Volver al chat"><I.back /></button>
+            <h2>Info del contacto</h2>
+          </div>
+        </div>
+      ) : null}
       <div className="pane-scroll">
         <div className="section" style={{ alignItems: 'center', textAlign: 'center' }}>
           <Avatar name={c.contact?.name || c.contact?.waId} size="lg" />
@@ -479,7 +664,7 @@ function ContactPanel({ conversation: c, notes, users, hasBots, onClose, onUpdat
             <strong>{c.contact?.name || 'Sin nombre'}</strong>
           )}
           <a className="mono small" href={`https://wa.me/${c.contact?.waId}`} target="_blank" rel="noreferrer">{fmtPhone(c.contact?.waId)}</a>
-          <button className="btn ghost sm" onClick={onClose}>Ocultar panel</button>
+          {!mobile ? <button className="btn ghost sm" onClick={onClose}>Ocultar panel</button> : null}
         </div>
 
         <div className="section">
@@ -558,6 +743,13 @@ function ContactPanel({ conversation: c, notes, users, hasBots, onClose, onUpdat
           ))}
           {notes.length === 0 ? <span className="small faint">Sin notas</span> : null}
         </div>
+
+        {canWrite ? (
+          <div className="section">
+            <button type="button" className="panel-action" onClick={onClear}><I.broom /> Vaciar chat</button>
+            <button type="button" className="panel-action danger" onClick={onDelete}><I.trash /> Eliminar chat</button>
+          </div>
+        ) : null}
       </div>
     </aside>
   );
