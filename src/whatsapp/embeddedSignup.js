@@ -113,3 +113,8 @@ export async function debugTokenWith(accessToken, appId, appSecret) {
   });
   return response.data?.data;
 }
+
+/** Quita la suscripción de la app a los webhooks de esa WABA (al eliminar el último número de la WABA). */
+export async function unsubscribeAppFromWaba(wabaId, accessToken) {
+  return graphRequest({ method: 'DELETE', path: `${wabaId}/subscribed_apps`, accessToken });
+}

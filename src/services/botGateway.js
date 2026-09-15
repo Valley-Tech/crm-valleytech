@@ -73,7 +73,7 @@ export async function dispatchToBots({ tenantId, channel, payload, integrationId
 
   await Promise.all(
     bots.map((bot) =>
-      botDispatchQueue.add('dispatch', { botId: bot.id, payload }, { jobId: `bot:${bot.id}:${payload.message?.id ?? Date.now()}` })
+      botDispatchQueue.add('dispatch', { botId: bot.id, payload }, { jobId: `bot-${bot.id}-${payload.message?.id ?? Date.now()}` })
     )
   );
 

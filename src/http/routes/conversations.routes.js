@@ -38,7 +38,7 @@ router.use(requireAuth);
 async function loadConversation(req) {
   const conversation = await prisma.conversation.findFirst({
     where: { id: req.params.id, tenantId: req.auth.tenantId },
-    include: { contact: true, assignedUser: { select: { id: true, name: true } } },
+    include: { contact: true, assignedUser: { select: { id: true, name: true } }, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
   });
   if (!conversation) throw notFound('Conversación no encontrada');
   return conversation;
@@ -67,6 +67,15 @@ function serializeConversation(conversation) {
         }
       : null,
     assignedUser: conversation.assignedUser ?? null,
+    // Número del cliente por el que va este chat (null si el número fue eliminado).
+    integration: conversation.integration
+      ? {
+          id: conversation.integration.id,
+          displayPhoneNumber: conversation.integration.displayPhoneNumber,
+          verifiedName: conversation.integration.verifiedName,
+          active: conversation.integration.active,
+        }
+      : null,
   };
 }
 
@@ -113,7 +122,7 @@ router.get(
     const [items, total] = await Promise.all([
       prisma.conversation.findMany({
         where,
-        include: { contact: true, assignedUser: { select: { id: true, name: true } } },
+        include: { contact: true, assignedUser: { select: { id: true, name: true } }, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
         orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
         take: limit,
         skip: offset,
@@ -285,7 +294,7 @@ router.patch(
     const updated = await prisma.conversation.update({
       where: { id: req.params.id },
       data,
-      include: { contact: true, assignedUser: { select: { id: true, name: true } } },
+      include: { contact: true, assignedUser: { select: { id: true, name: true } }, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
     });
 
     await recordAudit({
@@ -315,7 +324,7 @@ router.post(
     const updated = await prisma.conversation.update({
       where: { id: req.params.id },
       data: { unreadCount: 0 },
-      include: { contact: true, assignedUser: { select: { id: true, name: true } } },
+      include: { contact: true, assignedUser: { select: { id: true, name: true } }, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
     });
     res.json(serializeConversation(updated));
 

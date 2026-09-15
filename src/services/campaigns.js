@@ -93,7 +93,7 @@ export async function createCampaign({ tenantId, userId, input }) {
 
   if (campaign.status === 'scheduled') {
     const delay = Math.max(0, new Date(campaign.scheduledAt).getTime() - Date.now());
-    await campaignQueue.add('run', { campaignId: campaign.id }, { jobId: `campaign:${campaign.id}`, delay });
+    await campaignQueue.add('run', { campaignId: campaign.id }, { jobId: `campaign-${campaign.id}`, delay });
   }
 
   return campaign;
@@ -112,7 +112,7 @@ export async function startCampaign({ tenantId, campaignId }) {
   });
 
   // jobId único por arranque: si se pausa y se reanuda, el job anterior ya terminó.
-  await campaignQueue.add('run', { campaignId: campaign.id }, { jobId: `campaign:${campaign.id}:${Date.now()}` });
+  await campaignQueue.add('run', { campaignId: campaign.id }, { jobId: `campaign-${campaign.id}-${Date.now()}` });
   await publishEvent({ tenantId, type: 'campaign:updated', payload: { id: campaign.id, status: 'running' } });
   return updated;
 }

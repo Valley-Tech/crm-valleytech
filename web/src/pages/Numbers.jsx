@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { get, post, patch } from '../api.js';
+import { get, post, patch, del } from '../api.js';
 import { useAuth, useToast } from '../store.jsx';
 import { Badge, Button, Empty, Field, Loading, Modal, Switch, Tabs, fmtDateTime } from '../components/ui.jsx';
 import { I } from '../components/Icons.jsx';
@@ -36,6 +36,7 @@ export default function Numbers() {
   const [connecting, setConnecting] = useState(false);
   const [diagnosing, setDiagnosing] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [deleting, setDeleting] = useState(null);
   const [webhook, setWebhook] = useState(null);
 
   const load = useCallback(() => {
@@ -100,6 +101,7 @@ export default function Numbers() {
                     <div className="row" style={{ gap: 6 }}>
                       <Button size="sm" onClick={() => setDiagnosing(i)}>Diagnosticar</Button>
                       <Button size="sm" onClick={() => setEditing(i)}>Credenciales</Button>
+                      <Button size="sm" variant="danger" onClick={() => setDeleting(i)}>Eliminar</Button>
                     </div>
                   </td>
                 </tr>
@@ -118,6 +120,7 @@ export default function Numbers() {
       {connecting ? <ConnectModal config={config} onClose={() => setConnecting(false)} onDone={() => { setConnecting(false); load(); }} /> : null}
       {diagnosing ? <DiagnoseModal integration={diagnosing} onClose={() => setDiagnosing(null)} onChanged={load} /> : null}
       {editing ? <CredentialsModal integration={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load(); }} /> : null}
+      {deleting ? <DeleteModal integration={deleting} siblings={(items ?? []).filter((x) => x.wabaId === deleting.wabaId && x.id !== deleting.id).length} onClose={() => setDeleting(null)} onDone={() => { setDeleting(null); load(); }} /> : null}
     </>
   );
 }
@@ -395,5 +398,56 @@ function WebhookStatus({ webhook, items }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/* ========================================================================== */
+function DeleteModal({ integration, siblings, onClose, onDone }) {
+  const toast = useToast();
+  const [typed, setTyped] = useState('');
+  const [unsubscribe, setUnsubscribe] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const label = integration.displayPhoneNumber || integration.phoneNumberId;
+  const expected = (integration.displayPhoneNumber || integration.phoneNumberId).replace(/\s+/g, '');
+  const matches = typed.replace(/\s+/g, '') === expected;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!matches) return;
+    setBusy(true);
+    try {
+      const r = await del(`/api/integrations/${integration.id}?unsubscribe=${unsubscribe ? 'true' : 'false'}`);
+      const parts = [`Número ${label} eliminado`];
+      if (r.detached?.conversations) parts.push(`${r.detached.conversations} conversaciones conservadas sin número`);
+      if (r.unsubscribed === false) parts.push('no se pudo retirar la suscripción en Meta');
+      toast(parts.join(' · '));
+      onDone();
+    } catch (err) { toast(err.message, { error: true }); } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal title={`Eliminar ${label}`} onClose={onClose}>
+      <form className="col" style={{ gap: 12 }} onSubmit={submit}>
+        <div className="callout crit small">
+          Esta acción no se puede deshacer. El token de acceso se borra del CRM y el número deja de recibir y enviar mensajes desde aquí.
+        </div>
+        <ul className="small muted" style={{ margin: 0, paddingLeft: 18 }}>
+          <li>Las conversaciones, mensajes y contactos <strong>se conservan</strong> como historial, pero no se podrá responder en ellas hasta volver a conectar el número.</li>
+          <li>Los chatbots que atendían este número pasan a "Todos los números".</li>
+          <li>Las campañas terminadas se conservan. Si hay campañas programadas o en curso, primero hay que pausarlas.</li>
+          <li>Nada cambia en Meta: el número, la WABA y el token siguen existiendo allá.</li>
+        </ul>
+        {siblings === 0 ? (
+          <label className="checkbox"><input type="checkbox" checked={unsubscribe} onChange={(e) => setUnsubscribe(e.target.checked)} /> <span className="small">Retirar también la suscripción de la app a esta WABA en Meta (deja de enviar webhooks al CRM). Márcalo solo si ningún otro sistema tuyo depende de ella.</span></label>
+        ) : (
+          <div className="small muted">Hay {siblings} número(s) más de la misma WABA conectados: la suscripción a los webhooks se mantiene.</div>
+        )}
+        <Field label={`Escribe ${label} para confirmar`}><input className="input mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" /></Field>
+        <div className="row end" style={{ gap: 8 }}>
+          <Button type="button" onClick={onClose}>Cancelar</Button>
+          <Button variant="danger" type="submit" loading={busy} disabled={!matches}>Eliminar número</Button>
+        </div>
+      </form>
+    </Modal>
   );
 }

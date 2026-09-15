@@ -105,10 +105,16 @@ export async function resolveIntegration(conversation) {
   if (conversation.integrationId) {
     const integration = await prisma.metaIntegration.findUnique({ where: { id: conversation.integrationId } });
     if (integration?.active) return integration;
+    // El número fue eliminado o desactivado: no se responde desde otro número por accidente.
+    return null;
   }
 
-  return prisma.metaIntegration.findFirst({
+  // Conversación sin número (creada por un bot con "to" antes de que llegara
+  // un entrante): solo se asume el número si el cliente tiene uno único.
+  const candidates = await prisma.metaIntegration.findMany({
     where: { tenantId: conversation.tenantId, channel: conversation.channel, active: true },
     orderBy: { connectedAt: 'asc' },
+    take: 2,
   });
+  return candidates.length === 1 ? candidates[0] : null;
 }

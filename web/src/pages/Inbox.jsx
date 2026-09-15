@@ -361,6 +361,12 @@ function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot,
         </div>
       </div>
 
+      {c.integration === null || c.integration?.active === false ? (
+        <div className="notice" style={{ background: 'var(--crit-soft)', color: 'var(--crit)' }}>
+          <span>{c.integration === null ? 'Esta conversación no tiene un número de WhatsApp asignado (normalmente porque el número se eliminó del CRM). El historial se conserva, pero no se puede responder hasta volver a conectar el número.' : `El número ${c.integration.displayPhoneNumber} está desactivado: actívalo en Números de WhatsApp para responder.`}</span>
+        </div>
+      ) : null}
+
       {!windowOpen ? (
         <div className="notice">
           <span>La ventana de 24 h está cerrada. Solo puedes enviar una plantilla aprobada hasta que el cliente vuelva a escribir.</span>
@@ -519,6 +525,13 @@ function ContactPanel({ conversation: c, notes, users, hasBots, onClose, onUpdat
           {!hasBots ? <p className="tiny faint">Solo aplica a chatbots conectados por el Bot Gateway.</p> : null}
           {c.botPausedUntil && !c.botActive ? <p className="tiny faint">Se reactiva solo el {fmtDateTime(c.botPausedUntil)}.</p> : null}
         </div>
+
+        {c.integration ? (
+          <div className="section">
+            <h4>Número del negocio</h4>
+            <p className="small"><span className="mono">{c.integration.displayPhoneNumber}</span>{c.integration.verifiedName ? ` · ${c.integration.verifiedName}` : ''}</p>
+          </div>
+        ) : null}
 
         <div className="section">
           <h4>Ventana de 24 h</h4>

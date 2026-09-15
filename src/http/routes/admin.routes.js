@@ -16,6 +16,7 @@ import {
   subscribeAppToWaba,
   registerPhoneNumber,
   getPhoneNumber,
+  unsubscribeAppFromWaba,
 } from '../../whatsapp/embeddedSignup.js';
 import { metaCredentials } from '../../whatsapp/credentials.js';
 import { diagnoseIntegration } from '../../services/integrationDiagnostics.js';
@@ -337,6 +338,76 @@ router.post(
     });
 
     res.json(serializeIntegration(updated));
+  })
+);
+
+/**
+ * Elimina un número del CRM.
+ *
+ * El historial se conserva: las conversaciones y campañas de ese número se
+ * quedan sin integración (integration_id = NULL), los bots que lo atendían
+ * pasan a "todos los números" y el token cifrado desaparece de la base de datos.
+ * Los webhooks que Meta siga enviando de ese número se descartan (y se listan
+ * como "número no conectado" en el panel de Números).
+ */
+router.delete(
+  '/integrations/:id',
+  asyncHandler(async (req, res) => {
+    const { unsubscribe = false } = z.object({ unsubscribe: z.coerce.boolean().optional() }).parse(req.query);
+    const integration = await prisma.metaIntegration.findFirst({
+      where: { id: req.params.id, tenantId: req.auth.tenantId },
+    });
+    if (!integration) throw notFound('Integración no encontrada');
+
+    const running = await prisma.campaign.count({
+      where: { integrationId: integration.id, status: { in: ['running', 'scheduled'] } },
+    });
+    if (running > 0) {
+      throw conflict('campaigns_running', `Hay ${running} campaña(s) programadas o en curso con este número. Páusalas o cancélalas antes de eliminarlo.`);
+    }
+
+    // Solo se retira la suscripción de la WABA si este era su último número en el CRM.
+    let unsubscribed = null;
+    const siblings = await prisma.metaIntegration.count({ where: { wabaId: integration.wabaId, id: { not: integration.id } } });
+    if (unsubscribe && siblings === 0) {
+      try {
+        await unsubscribeAppFromWaba(integration.wabaId, metaCredentials(integration));
+        unsubscribed = true;
+      } catch (err) {
+        unsubscribed = false;
+        logger.warn({ err: err.message }, 'No se pudo retirar la suscripción de la WABA en Meta');
+      }
+    }
+
+    const [conversations, campaigns, bots] = await prisma.$transaction([
+      prisma.conversation.updateMany({ where: { integrationId: integration.id }, data: { integrationId: null } }),
+      prisma.campaign.updateMany({ where: { integrationId: integration.id }, data: { integrationId: null } }),
+      prisma.botIntegration.updateMany({ where: { metaIntegrationId: integration.id }, data: { metaIntegrationId: null } }),
+      prisma.metaIntegration.delete({ where: { id: integration.id } }),
+    ]);
+    invalidateWebhookSecrets();
+
+    await recordAudit({
+      tenantId: req.auth.tenantId,
+      actorUserId: req.auth.userId,
+      action: 'integration.delete',
+      entity: 'meta_integration',
+      entityId: integration.id,
+      metadata: {
+        phoneNumberId: integration.phoneNumberId,
+        displayPhoneNumber: integration.displayPhoneNumber,
+        conversations: conversations.count,
+        campaigns: campaigns.count,
+        bots: bots.count,
+        unsubscribed,
+      },
+    });
+
+    res.json({
+      ok: true,
+      detached: { conversations: conversations.count, campaigns: campaigns.count, bots: bots.count },
+      unsubscribed,
+    });
   })
 );
 

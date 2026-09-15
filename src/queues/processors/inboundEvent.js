@@ -200,7 +200,7 @@ async function handleIncomingMessage(integration, value, incoming, options = {})
   });
 
   if (message.mediaId) {
-    await mediaQueue.add('download', { messageId: message.id }, { jobId: `media:${message.id}` });
+    await mediaQueue.add('download', { messageId: message.id }, { jobId: `media-${message.id}` });
   }
 
   await publishEvent({

@@ -53,7 +53,7 @@ export default async function processOutboundMessage(job) {
   const integration = await resolveIntegration(conversation);
 
   if (!integration) {
-    await markFailed(message, { reason: 'El cliente no tiene una integración de WhatsApp activa' });
+    await markFailed(message, { reason: 'Esta conversación no tiene un número de WhatsApp activo (eliminado o desactivado)' });
     return { failed: 'no_integration' };
   }
 
