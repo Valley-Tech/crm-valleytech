@@ -157,7 +157,20 @@ function ConnectModal({ config, onClose, onDone }) {
     setState({ step: 'loading', detail: 'Cargando el SDK de Meta…' });
     try {
       const FB = await loadFacebookSdk(config.metaAppId, config.metaGraphVersion);
-      setState({ step: 'dialog', detail: 'Completa el registro en la ventana de Meta…' });
+      const loginOptions = {
+        config_id: config.embeddedSignupConfigId,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: {
+          setup: {},
+          // Coexistencia: Meta cambia el paso del número por "Conecta tu cuenta de la app de WhatsApp Business".
+          featureType: coexistence ? 'whatsapp_business_app_onboarding' : '',
+          sessionInfoVersion: '3',
+        },
+      };
+      // Para depurar con Meta: en la consola del navegador se ve exactamente qué se envía.
+      console.info('[registro insertado] FB.login', JSON.stringify(loginOptions));
+      setState({ step: 'dialog', detail: `Completa el registro en la ventana de Meta… (${coexistence ? 'featureType: whatsapp_business_app_onboarding' : 'flujo estándar'})` });
       // El SDK de Meta exige un callback "function" normal: si se le pasa una
       // función async responde "Expression is of type asyncfunction, not function".
       const onLogin = (response) => {
@@ -174,19 +187,7 @@ function ConnectModal({ config, onClose, onDone }) {
           .then((integration) => { toast(`Número ${integration.displayPhoneNumber || ''} conectado`); onDone(); })
           .catch((err) => setState({ step: 'error', detail: err.message }));
       };
-      FB.login(
-        onLogin,
-        {
-          config_id: config.embeddedSignupConfigId,
-          response_type: 'code',
-          override_default_response_type: true,
-          extras: {
-            setup: {},
-            featureType: coexistence ? 'whatsapp_business_app_onboarding' : '',
-            sessionInfoVersion: '3',
-          },
-        }
-      );
+      FB.login(onLogin, loginOptions);
     } catch (err) {
       setState({ step: 'error', detail: err.message });
     }
@@ -213,7 +214,7 @@ function ConnectModal({ config, onClose, onDone }) {
           )}
           {tab === 'coexistence' ? (
             <div className="callout info small">
-              Requisitos de Meta: app de WhatsApp Business actualizada en el celular del cliente, y el CRM debe ser Tech Provider aprobado. Límite fijo de 20 mensajes por segundo; sin listas de difusión ni grupos.
+              Requisitos de Meta: app de WhatsApp Business 2.24.17 o superior en el celular del cliente, número que hoy NO esté en la Cloud API, y el CRM debe ser Tech Provider aprobado. El diálogo debe mostrar "Conecta tu cuenta existente de la app de WhatsApp Business"; si muestra "crea un número nuevo", la función no está activa en la app de Meta (ver guía). Límite fijo de 20 mensajes por segundo; sin listas de difusión ni grupos.
             </div>
           ) : null}
           {!config?.embeddedSignupConfigId ? (
