@@ -219,3 +219,42 @@ export function useMediaQuery(query) {
 }
 
 export const MOBILE_QUERY = '(max-width: 860px)';
+
+/* ------------------------------------------------------------------------ */
+/* Etiqueta de canal: qué chatbot / número atiende un chat o un contacto.    */
+/* ------------------------------------------------------------------------ */
+
+/** Tono estable (0-359) a partir de un id: el mismo número siempre tiene el mismo color. */
+export function hueOf(id = '') {
+  let h = 0;
+  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+/** Nombre corto del canal: bot > nombre verificado > número. */
+export function channelLabel({ bot, integration } = {}) {
+  if (bot?.name) return bot.name;
+  if (integration?.verifiedName) return integration.verifiedName;
+  if (integration?.displayPhoneNumber) return integration.displayPhoneNumber;
+  return null;
+}
+
+/**
+ * Chip de color con el chatbot y el número del negocio.
+ * Sin número asignado muestra "sin número" en rojo (no se puede responder).
+ */
+export function ChannelTag({ bot, integration, full = false, className = '' }) {
+  if (!integration && !bot) {
+    return <span className={`chan none ${className}`} title="Este chat no tiene número de WhatsApp asignado">sin número</span>;
+  }
+  const label = channelLabel({ bot, integration });
+  const hue = hueOf(integration?.id ?? bot?.id ?? '');
+  const detail = [bot?.name && integration?.verifiedName ? integration.verifiedName : null, integration?.displayPhoneNumber].filter(Boolean).join(' · ');
+  return (
+    <span className={`chan ${integration?.active === false ? 'off' : ''} ${className}`} style={{ '--h': hue }} title={detail ? `${label} · ${detail}` : label}>
+      <span className="chan-dot" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+      {full && detail ? <span className="chan-detail truncate">{detail}</span> : null}
+    </span>
+  );
+}

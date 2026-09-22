@@ -3,7 +3,7 @@ import { get, post, patch, del, api } from '../api.js';
 import { getSocket } from '../socket.js';
 import { useRouter } from '../router.jsx';
 import { useAuth, useToast, hasRole } from '../store.jsx';
-import { Avatar, Badge, Button, Chips, Empty, Loading, Switch, Menu, Confirm, useMediaQuery, MOBILE_QUERY, fmtTime, fmtDateTime, fmtPhone, CONV_STATUS, STAGES } from '../components/ui.jsx';
+import { Avatar, Badge, Button, Chips, Empty, Loading, Switch, Menu, Confirm, ChannelTag, useMediaQuery, MOBILE_QUERY, fmtTime, fmtDateTime, fmtPhone, CONV_STATUS, STAGES } from '../components/ui.jsx';
 import { MessageBubble } from '../components/MessageBubble.jsx';
 import { TemplatePicker } from '../components/TemplatePicker.jsx';
 import { I } from '../components/Icons.jsx';
@@ -42,6 +42,8 @@ export default function Inbox({ params }) {
   const conversationId = params.conversationId ?? null;
 
   const [filter, setFilter] = useState('all');
+  const [channel, setChannel] = useState(''); // '' = todos los números · 'none' = sin número · id
+  const [channels, setChannels] = useState({ items: [], botsForAll: [], withoutNumber: 0 });
   const [query, setQuery] = useState('');
   const [list, setList] = useState({ items: [], total: 0, loading: true });
   const [current, setCurrent] = useState(null);
@@ -61,7 +63,7 @@ export default function Inbox({ params }) {
 
   /* ---------------- lista ---------------- */
   const loadList = useCallback(async () => {
-    const qs = [filterQuery(filter, user.id), query ? `q=${encodeURIComponent(query)}` : '', 'limit=60'].filter(Boolean).join('&');
+    const qs = [filterQuery(filter, user.id), channel ? `integrationId=${encodeURIComponent(channel)}` : '', query ? `q=${encodeURIComponent(query)}` : '', 'limit=60'].filter(Boolean).join('&');
     try {
       const data = await get(`/api/conversations?${qs}`);
       setList({ items: data.items, total: data.total, loading: false });
@@ -69,18 +71,29 @@ export default function Inbox({ params }) {
       toast(err.message, { error: true });
       setList((s) => ({ ...s, loading: false }));
     }
-  }, [filter, query, user.id, toast]);
+  }, [filter, channel, query, user.id, toast]);
 
   useEffect(() => { loadList(); }, [loadList]);
+
+  const loadChannels = useCallback(() => {
+    get('/api/inbox/channels').then((d) => {
+      setChannels(d);
+      // Todos los chatbots activos (por número o para todos): sirve para saber si hay Bot Gateway.
+      const all = new Map();
+      for (const i of d.items) for (const b of i.bots) all.set(b.id, b);
+      for (const b of d.botsForAll) all.set(b.id, b);
+      setBots([...all.values()]);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     // Datos auxiliares que cambian poco.
     get('/api/quick-replies').then((d) => setQuickReplies(d.items)).catch(() => {});
+    loadChannels();
     if (hasRole(user, 'admin')) {
       get('/api/users').then((d) => setUsers(d.items.filter((u) => u.active))).catch(() => {});
-      get('/api/bots').then((d) => setBots(d.items.filter((b) => b.active))).catch(() => {});
     }
-  }, [user]);
+  }, [user, loadChannels]);
 
   /* ---------------- hilo ---------------- */
   const loadThread = useCallback(async (id) => {
@@ -248,6 +261,19 @@ export default function Inbox({ params }) {
               </div>
             </div>
             <input id="inbox-search" className="input" type="search" placeholder="Buscar por nombre o número" value={query} onChange={(e) => setQuery(e.target.value)} />
+            {channels.items.length > 1 || channels.withoutNumber > 0 ? (
+              <div className="channel-filter">
+                <select id="inbox-channel" className="select" value={channel} onChange={(e) => setChannel(e.target.value)} aria-label="Filtrar por número o chatbot">
+                  <option value="">Todos los números y chatbots</option>
+                  {channels.items.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {[i.bots.map((b) => b.name).join(' + ') || null, i.verifiedName, i.displayPhoneNumber].filter(Boolean).join(' · ')}{i.active ? '' : ' (desactivado)'}
+                    </option>
+                  ))}
+                  {channels.withoutNumber > 0 ? <option value="none">Sin número asignado ({channels.withoutNumber})</option> : null}
+                </select>
+              </div>
+            ) : null}
             <Chips value={filter} onChange={setFilter} items={FILTERS} />
           </div>
         )}
@@ -378,9 +404,10 @@ function ConversationRow({ conversation: c, active, selectMode, selected, canWri
           {c.unreadCount > 0 ? <span className="badge solid">{c.unreadCount}</span> : null}
         </div>
         <div className="meta">
+          <ChannelTag bot={c.bot} integration={c.integration} />
           {c.status !== 'open' ? <span className={`badge ${c.status === 'pending' ? 'warn' : ''}`}>{CONV_STATUS[c.status]}</span> : null}
           {c.assignedUser ? <span className="badge">{c.assignedUser.name.split(' ')[0]}</span> : null}
-          {c.botActive ? <span className="badge accent">bot</span> : null}
+          {c.botActive ? <span className="badge accent" title={c.bot ? `${c.bot.name} responde en este chat` : 'bot activo'}>{c.botActive && c.bot ? 'bot activo' : 'bot'}</span> : c.botPausedUntil ? <span className="badge warn">bot en pausa</span> : null}
         </div>
       </div>
       {canWrite && !selectMode ? (
@@ -506,15 +533,18 @@ function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot,
           <Avatar name={c.contact?.name || c.contact?.waId} />
           <div style={{ minWidth: 0 }}>
             <div className="truncate" style={{ fontWeight: 600 }}>{title}</div>
-            <div className="tiny faint">
-              {isMobile ? (c.botActive ? 'bot activo' : c.botPausedUntil ? 'bot en pausa' : CONV_STATUS[c.status]) : `${fmtPhone(c.contact?.waId)} · ${CONV_STATUS[c.status]} · ${c.pipelineStage}`}
-              {isMobile ? ' · toca para ver info' : ''}
+            <div className="tiny faint row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+              <ChannelTag bot={c.bot} integration={c.integration} />
+              <span className="truncate">
+                {isMobile ? (c.botActive ? 'bot activo' : c.botPausedUntil ? 'bot en pausa' : CONV_STATUS[c.status]) : `${fmtPhone(c.contact?.waId)} · ${CONV_STATUS[c.status]} · ${c.pipelineStage}`}
+                {isMobile ? ' · toca para ver info' : ''}
+              </span>
             </div>
           </div>
         </div>
         <div className="row" style={{ flex: 'none' }}>
           <span className="desktop-only row">
-            {c.botActive ? <Badge tone="accent">bot activo</Badge> : c.botPausedUntil ? <Badge tone="warn">bot en pausa</Badge> : null}
+            {!canWrite ? (c.botActive ? <Badge tone="accent">bot activo</Badge> : c.botPausedUntil ? <Badge tone="warn">bot en pausa</Badge> : null) : null}
             {canWrite ? (
               <Button size="sm" onClick={onToggleBot} title={hasBots ? '' : 'No hay chatbots conectados por el Bot Gateway'}>
                 {c.botActive ? <><I.pause /> Pausar bot</> : <><I.play /> Reactivar bot</>}
@@ -540,7 +570,7 @@ function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot,
 
       {c.integration === null || c.integration?.active === false ? (
         <div className="notice" style={{ background: 'var(--crit-soft)', color: 'var(--crit)' }}>
-          <span>{c.integration === null ? 'Esta conversación no tiene un número de WhatsApp asignado (normalmente porque el número se eliminó del CRM). El historial se conserva, pero no se puede responder hasta volver a conectar el número.' : `El número ${c.integration.displayPhoneNumber} está desactivado: actívalo en Números de WhatsApp para responder.`}</span>
+          <span>{c.integration === null ? 'Este chat no tiene número de WhatsApp asignado: lo abrió un chatbot antes de que el CRM supiera por qué número salía, o el número se eliminó. Se conserva el historial, pero no se puede responder. Un administrador puede asignarlo en Números de WhatsApp → "Asignar chats sin número".' : `El número ${c.integration.displayPhoneNumber} está desactivado: actívalo en Números de WhatsApp para responder.`}</span>
         </div>
       ) : null}
 
@@ -711,12 +741,17 @@ function ContactPanel({ conversation: c, notes, users, hasBots, mobile = false, 
           {c.botPausedUntil && !c.botActive ? <p className="tiny faint">Se reactiva solo el {fmtDateTime(c.botPausedUntil)}.</p> : null}
         </div>
 
-        {c.integration ? (
-          <div className="section">
-            <h4>Número del negocio</h4>
-            <p className="small"><span className="mono">{c.integration.displayPhoneNumber}</span>{c.integration.verifiedName ? ` · ${c.integration.verifiedName}` : ''}</p>
-          </div>
-        ) : null}
+        <div className="section">
+          <h4>Atendido por</h4>
+          <ChannelTag bot={c.bot} integration={c.integration} />
+          {c.integration ? (
+            <p className="tiny faint" style={{ margin: '6px 0 0' }}>
+              {c.bot ? `Chatbot ${c.bot.name} · ` : 'Sin chatbot por Bot Gateway · '}número <span className="mono">{c.integration.displayPhoneNumber}</span>{c.integration.verifiedName ? ` (${c.integration.verifiedName})` : ''}
+            </p>
+          ) : (
+            <p className="tiny faint" style={{ margin: '6px 0 0' }}>Sin número asignado: no se puede responder desde el CRM.</p>
+          )}
+        </div>
 
         <div className="section">
           <h4>Ventana de 24 h</h4>

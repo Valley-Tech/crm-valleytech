@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { get, post, patch, del } from '../api.js';
 import { useAuth, useToast } from '../store.jsx';
-import { Badge, Button, Empty, Field, Loading, Modal, Switch, Tabs, fmtDateTime } from '../components/ui.jsx';
+import { Badge, Button, Empty, Field, Loading, Modal, Switch, Tabs, Confirm, fmtDateTime } from '../components/ui.jsx';
 import { I } from '../components/Icons.jsx';
 
 /* ---------------------------------------------------------------- SDK de Meta */
@@ -38,9 +38,12 @@ export default function Numbers() {
   const [editing, setEditing] = useState(null);
   const [deleting, setDeleting] = useState(null);
   const [webhook, setWebhook] = useState(null);
+  const [orphans, setOrphans] = useState(0); // chats sin número asignado
+  const [adopting, setAdopting] = useState(null);
 
   const load = useCallback(() => {
     get('/api/integrations').then((d) => setItems(d.items)).catch((e) => toast(e.message, { error: true }));
+    get('/api/inbox/channels').then((d) => setOrphans(d.withoutNumber ?? 0)).catch(() => {});
   }, [toast]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -51,6 +54,15 @@ export default function Numbers() {
     try {
       const updated = await patch(`/api/integrations/${integration.id}`, data);
       setItems((list) => list.map((i) => (i.id === updated.id ? updated : i)));
+    } catch (err) { toast(err.message, { error: true }); }
+  }
+
+  async function adoptOrphans(integration) {
+    try {
+      const r = await post(`/api/integrations/${integration.id}/adopt-orphans`);
+      toast(r.adopted === 0 ? 'No había chats sin número' : `${r.adopted} chat${r.adopted === 1 ? '' : 's'} asignado${r.adopted === 1 ? '' : 's'} a ${integration.displayPhoneNumber}`);
+      setAdopting(null);
+      load();
     } catch (err) { toast(err.message, { error: true }); }
   }
 
@@ -101,6 +113,7 @@ export default function Numbers() {
                     <div className="row" style={{ gap: 6 }}>
                       <Button size="sm" onClick={() => setDiagnosing(i)}>Diagnosticar</Button>
                       <Button size="sm" onClick={() => setEditing(i)}>Credenciales</Button>
+                      {orphans > 0 && i.active ? <Button size="sm" onClick={() => setAdopting(i)} title="Asignar a este número los chats que no tienen número">Asignar chats ({orphans})</Button> : null}
                       <Button size="sm" variant="danger" onClick={() => setDeleting(i)}>Eliminar</Button>
                     </div>
                   </td>
@@ -115,7 +128,24 @@ export default function Numbers() {
         <strong>Eco pausa bot:</strong> en un número en coexistencia, cada mensaje enviado desde la app de WhatsApp Business (por una persona o por la IA de Meta) llega como <em>eco</em>. Si activas esta opción, ese eco pausa el chatbot conectado por el Bot Gateway en esa conversación. Déjala apagada si el número usa la IA de Meta.
       </div>
 
+      {orphans > 0 ? (
+        <div className="card pad small" style={{ background: 'var(--warn-soft)', color: 'var(--warn)' }}>
+          <strong>{orphans} chat{orphans === 1 ? '' : 's'} sin número asignado.</strong> Los abrió un chatbot en modo espejo antes de que el CRM supiera por qué número salían (o el número se eliminó). No se pueden responder desde la bandeja hasta asignarlos: usa <em>Asignar chats</em> en el número que corresponda. Con la versión 2.6 de los adaptadores (variable <span className="mono">CRM_PHONE_NUMBER_ID</span>) esto no vuelve a pasar.
+        </div>
+      ) : null}
+
       {webhook ? <WebhookStatus webhook={webhook} items={items ?? []} /> : null}
+
+      {adopting ? (
+        <Confirm
+          title={`¿Asignar ${orphans} chat${orphans === 1 ? '' : 's'} a ${adopting.displayPhoneNumber}?`}
+          confirmLabel="Asignar"
+          onConfirm={() => adoptOrphans(adopting)}
+          onClose={() => setAdopting(null)}
+        >
+          Todos los chats que hoy no tienen número quedarán como atendidos por <strong>{adopting.verifiedName || adopting.displayPhoneNumber}</strong> y podrán responderse desde la bandeja. Si tienes varios números y los chats huérfanos son de distintos números, asígnalos primero al más probable y corrige el resto a mano.
+        </Confirm>
+      ) : null}
 
       {connecting ? <ConnectModal config={config} onClose={() => setConnecting(false)} onDone={() => { setConnecting(false); load(); }} /> : null}
       {diagnosing ? <DiagnoseModal integration={diagnosing} onClose={() => setDiagnosing(null)} onChanged={load} /> : null}

@@ -8,15 +8,18 @@ import { recordUsage } from '../../services/usage.js';
 import { publishEvent } from '../../realtime/events.js';
 import { syncRecipientFromMessage } from '../../services/campaigns.js';
 import { metaCredentials } from '../../whatsapp/credentials.js';
+import { describeMetaError } from '../../lib/metaErrors.js';
 
 async function markFailed(message, { code, reason }) {
+  // Con código de Meta se guarda la explicación en español; sin código, el motivo tal cual.
+  const explained = code ? describeMetaError(code, reason) : reason;
   const updated = await prisma.message.update({
     where: { id: message.id },
     data: {
       status: 'failed',
       statusRank: rankOf('failed'),
       errorCode: code ?? null,
-      errorMessage: reason?.slice(0, 500) ?? null,
+      errorMessage: explained?.slice(0, 500) ?? null,
     },
   });
 
@@ -24,7 +27,7 @@ async function markFailed(message, { code, reason }) {
     tenantId: message.tenantId,
     conversationId: message.conversationId,
     type: 'message:status',
-    payload: { id: message.id, status: 'failed', errorCode: code, errorMessage: reason },
+    payload: { id: message.id, status: 'failed', errorCode: code, errorMessage: updated.errorMessage },
   });
 
   await syncRecipientFromMessage(updated);

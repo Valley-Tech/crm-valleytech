@@ -284,6 +284,38 @@ router.post(
   })
 );
 
+/**
+ * Asigna a este número los chats que quedaron sin número (creados por un bot
+ * en modo espejo antes de que el CRM supiera a qué número pertenecían, o
+ * huérfanos de un número eliminado). Así vuelven a poder responderse desde
+ * la bandeja y aparecen con su chatbot.
+ */
+router.post(
+  '/integrations/:id/adopt-orphans',
+  asyncHandler(async (req, res) => {
+    const integration = await prisma.metaIntegration.findFirst({
+      where: { id: req.params.id, tenantId: req.auth.tenantId },
+    });
+    if (!integration) throw notFound('Integración no encontrada');
+    if (!integration.active) throw badRequest('Activa el número antes de asignarle chats');
+
+    const result = await prisma.conversation.updateMany({
+      where: { tenantId: req.auth.tenantId, channel: integration.channel, integrationId: null },
+      data: { integrationId: integration.id },
+    });
+
+    await recordAudit({
+      tenantId: req.auth.tenantId,
+      actorUserId: req.auth.userId,
+      action: 'integration.adopt_orphans',
+      entity: 'integration',
+      entityId: integration.id,
+      metadata: { conversations: result.count },
+    });
+    res.json({ ok: true, adopted: result.count });
+  })
+);
+
 /** Reemplaza el token (y opcionalmente la app de Meta) de un número ya conectado. */
 router.post(
   '/integrations/:id/credentials',

@@ -23,6 +23,7 @@ CRM_BASE_URL=https://<tu-crm>.up.railway.app
 CRM_API_KEY=<apiKey del chatbot "Black Station" creado en CRM → Chatbots>
 CRM_SIGNING_SECRET=<signingSecret del mismo chatbot>
 CRM_MODE=mirror
+CRM_PHONE_NUMBER_ID=<phone_number_id del número>   # opcional: si falta usa BUSINESS_PHONE. Así el CRM sabe de qué número/chatbot es cada chat
 ```
 
 En el CRM → Chatbots, registra el bot con la URL `https://<tu-bot>.up.railway.app/crm/events`

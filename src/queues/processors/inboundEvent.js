@@ -12,6 +12,7 @@ import { rankOf, serializeMessage } from '../../services/messaging.js';
 import { buildBotEvent, dispatchToBots } from '../../services/botGateway.js';
 import { syncRecipientFromMessage } from '../../services/campaigns.js';
 import { noteUnknownPhoneNumber, touchIntegrationActivity } from '../../services/webhookDiagnostics.js';
+import { describeMetaError } from '../../lib/metaErrors.js';
 
 const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
 
@@ -102,7 +103,9 @@ async function handleStatuses(integration, statuses) {
         status: status.status,
         statusRank: rank,
         errorCode: metaError?.code ?? undefined,
-        errorMessage: metaError?.title ?? metaError?.message ?? undefined,
+        // Meta manda títulos en inglés ("Re-engagement message"); se guarda
+        // la explicación en español con qué hacer.
+        errorMessage: metaError ? describeMetaError(metaError.code, metaError.title ?? metaError.message).slice(0, 500) : undefined,
       },
     });
 
@@ -113,7 +116,7 @@ async function handleStatuses(integration, statuses) {
           tenantId: message.tenantId,
           conversationId: message.conversationId,
           type: 'message:status',
-          payload: { id: message.id, status: message.status, errorCode: message.errorCode },
+          payload: { id: message.id, status: message.status, errorCode: message.errorCode, errorMessage: message.errorMessage },
         });
 
         // Si el mensaje pertenece a una campaña, el destinatario avanza con él.

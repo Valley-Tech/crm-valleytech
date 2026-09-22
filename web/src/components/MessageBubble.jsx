@@ -226,8 +226,34 @@ export function MessageBubble({ message }) {
         {sourceLabel ? <span>{sourceLabel}</span> : null}
         <span>{fmtTime(message.createdAt)}</span>
         {message.direction === 'outbound' && !isSystem ? <span className="status">{STATUS_LABEL[message.status] ?? message.status}</span> : null}
-        {message.errorMessage ? <span className="err">{message.errorMessage}</span> : null}
       </div>
+      {message.status === 'failed' || message.errorMessage ? (
+        <div className="msg-error" role="alert">
+          <strong>No se entregó.</strong> {explainError(message.errorCode, message.errorMessage)}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+/**
+ * Mensajes guardados antes de la v2.6 tienen el título en inglés de Meta
+ * ("Re-engagement message"). Los códigos más comunes se traducen aquí también.
+ */
+const CLIENT_ERRORS = {
+  131047: 'Fuera de la ventana de 24 h: este número no le escribió al bot en las últimas 24 h, así que WhatsApp solo acepta una plantilla aprobada.',
+  470: 'Fuera de la ventana de 24 h: solo se acepta una plantilla aprobada.',
+  131026: 'No se pudo entregar: el número no tiene WhatsApp o bloqueó al negocio.',
+  131049: 'WhatsApp limitó el envío de marketing a este usuario. Reintenta más tarde.',
+  131050: 'El usuario pidió no recibir mensajes de marketing.',
+  132000: 'La cantidad de variables no coincide con la plantilla aprobada.',
+  132001: 'La plantilla no existe en ese idioma o no está aprobada.',
+  132012: 'Una variable de la plantilla tiene formato inválido (saltos de línea o espacios seguidos).',
+  133010: 'El número no está registrado en la Cloud API.',
+  190: 'El token de Meta venció: reconecta el número.',
+};
+function explainError(code, message) {
+  const known = CLIENT_ERRORS[Number(code)];
+  if (known && !(message || '').startsWith(known.slice(0, 20))) return `${known} (${message || `código ${code}`})`;
+  return message || (code ? `código ${code}` : 'sin detalle');
 }

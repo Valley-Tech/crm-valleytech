@@ -43,30 +43,64 @@ const messageSchema = z.object({
   reaction: z.any().optional(),
   previewUrl: z.boolean().optional(),
   botState: z.record(z.any()).optional(),
+  // Número del negocio por el que sale el mensaje (phone_number_id de Meta).
+  // Opcional: si no viene, se usa el número que atiende el bot.
+  phoneNumberId: z.string().min(3).optional(),
 });
+
+/**
+ * Número de WhatsApp al que pertenece lo que manda este bot.
+ *
+ * Antes las conversaciones creadas por un bot (con `to`) quedaban sin número:
+ * la bandeja no sabía de qué chatbot eran y no se podía responder desde el
+ * CRM ("Esta conversación no tiene un número de WhatsApp asignado").
+ */
+async function integrationForBot(bot, phoneNumberId) {
+  if (phoneNumberId) {
+    const byPhone = await prisma.metaIntegration.findFirst({ where: { phoneNumberId, tenantId: bot.tenantId } });
+    if (byPhone) return byPhone.id;
+  }
+  if (bot.metaIntegrationId) return bot.metaIntegrationId;
+  const candidates = await prisma.metaIntegration.findMany({
+    where: { tenantId: bot.tenantId, channel: bot.channel, active: true },
+    select: { id: true },
+    take: 2,
+  });
+  return candidates.length === 1 ? candidates[0].id : null;
+}
+
+/** Conversación indicada por id o por número destino; la deja con su número asignado. */
+async function conversationForBot(bot, { conversationId, to, phoneNumberId }) {
+  const { tenantId, channel } = bot;
+  const integrationId = await integrationForBot(bot, phoneNumberId);
+
+  if (conversationId) {
+    const conversation = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId } });
+    if (!conversation) throw notFound('Conversación no encontrada');
+    if (!conversation.integrationId && integrationId) {
+      return prisma.conversation.update({ where: { id: conversation.id }, data: { integrationId } });
+    }
+    return conversation;
+  }
+
+  // Envío proactivo: si el contacto no existe todavía, se crea.
+  const contact = await prisma.contact.upsert({
+    where: { tenantId_channel_waId: { tenantId, channel, waId: to } },
+    update: {},
+    create: { tenantId, channel, waId: to },
+  });
+  return findOrCreateConversation({ tenantId, contactId: contact.id, channel, integrationId });
+}
 
 router.post(
   '/messages',
   asyncHandler(async (req, res) => {
-    const { conversationId, to, botState, ...message } = messageSchema.parse(req.body);
-    const { tenantId, channel } = req.bot;
+    const { conversationId, to, botState, phoneNumberId, ...message } = messageSchema.parse(req.body);
+    const { tenantId } = req.bot;
 
     if (!conversationId && !to) throw badRequest('Indica conversationId o to');
 
-    let conversation;
-
-    if (conversationId) {
-      conversation = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId } });
-      if (!conversation) throw notFound('Conversación no encontrada');
-    } else {
-      // Envío proactivo: si el contacto no existe todavía, se crea.
-      const contact = await prisma.contact.upsert({
-        where: { tenantId_channel_waId: { tenantId, channel, waId: to } },
-        update: {},
-        create: { tenantId, channel, waId: to },
-      });
-      conversation = await findOrCreateConversation({ tenantId, contactId: contact.id, channel });
-    }
+    const conversation = await conversationForBot(req.bot, { conversationId, to, phoneNumberId });
 
     // La regla que hace que el traspaso a humano funcione de verdad.
     if (!conversation.botActive) {
@@ -108,27 +142,16 @@ router.post(
 router.post(
   '/messages/record',
   asyncHandler(async (req, res) => {
-    const { conversationId, to, botState, waMessageId, sentAt, ...message } = messageSchema
+    const { conversationId, to, botState, waMessageId, sentAt, phoneNumberId, ...message } = messageSchema
       .extend({
         waMessageId: z.string().min(5).optional(),
         sentAt: z.string().datetime().optional(),
       })
       .parse(req.body);
-    const { tenantId, channel } = req.bot;
+    const { tenantId } = req.bot;
     if (!conversationId && !to) throw badRequest('Indica conversationId o to');
 
-    let conversation;
-    if (conversationId) {
-      conversation = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId } });
-      if (!conversation) throw notFound('Conversación no encontrada');
-    } else {
-      const contact = await prisma.contact.upsert({
-        where: { tenantId_channel_waId: { tenantId, channel, waId: to } },
-        update: {},
-        create: { tenantId, channel, waId: to },
-      });
-      conversation = await findOrCreateConversation({ tenantId, contactId: contact.id, channel });
-    }
+    const conversation = await conversationForBot(req.bot, { conversationId, to, phoneNumberId });
 
     if (waMessageId) {
       const existing = await prisma.message.findUnique({ where: { waMessageId } });

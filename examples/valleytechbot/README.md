@@ -18,6 +18,7 @@ CRM_BASE_URL=https://<tu-crm>.up.railway.app
 CRM_API_KEY=<apiKey que muestra el CRM al crear el chatbot en "Chatbots">
 CRM_SIGNING_SECRET=<signingSecret del mismo chatbot>
 CRM_MODE=mirror
+CRM_PHONE_NUMBER_ID=<phone_number_id del número>   # opcional: si falta usa BUSINESS_PHONE. Así el CRM sabe de qué número/chatbot es cada chat
 ```
 
 ## Modo `mirror` (empieza por aquí — no cambia nada en Meta)

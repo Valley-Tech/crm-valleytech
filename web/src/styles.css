@@ -292,7 +292,10 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .select-head strong { white-space: nowrap; font-size: 0.9rem; }
 .row-menu { position: absolute; right: 8px; top: 8px; opacity: 0; transition: opacity .12s; }
 .conv:hover .row-menu, .conv:focus-within .row-menu { opacity: 1; }
-.thread-title { cursor: pointer; border-radius: 8px; padding-right: 8px; }
+.thread-title { cursor: pointer; border-radius: 8px; padding-right: 8px; flex: 1; min-width: 0; }
+.thread-title > div:last-child { flex: 1; min-width: 0; }
+.thread-head .chan { flex: none; max-width: 160px; }
+.contact-panel .chan { white-space: normal; }
 .thread-title:hover { background: var(--sunk); }
 .panel-action { display: flex; align-items: center; gap: 10px; width: 100%; font: inherit; background: none; border: none; padding: 10px 6px; border-radius: 6px; color: var(--ink); cursor: pointer; text-align: left; }
 .panel-action:hover { background: var(--sunk); }
@@ -397,3 +400,43 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
   .tabbar a { font-size: 0.6rem; }
   .msg { max-width: 92%; }
 }
+
+/* ---------------------------------------------------------------------- */
+/* Etiqueta de canal (chatbot / número) — v2.6                              */
+/* ---------------------------------------------------------------------- */
+.chan {
+  --h: 160;
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  font-size: 0.72rem; font-weight: 600; line-height: 1.2; padding: 2px 8px 2px 6px; border-radius: 999px;
+  color: hsl(var(--h) 45% 28%); background: hsl(var(--h) 70% 93%); border: 1px solid hsl(var(--h) 45% 80%);
+  white-space: nowrap;
+}
+.chan-dot { width: 7px; height: 7px; border-radius: 50%; background: hsl(var(--h) 60% 45%); flex: none; }
+.chan-detail { font-weight: 400; opacity: 0.8; }
+.chan-detail::before { content: '·'; margin: 0 4px; }
+.chan.none { color: var(--crit); background: var(--crit-soft); border-color: transparent; }
+.chan.none::before { content: '!'; font-weight: 800; }
+.chan.off { opacity: 0.6; text-decoration: line-through; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .chan { color: hsl(var(--h) 60% 80%); background: hsl(var(--h) 40% 18%); border-color: hsl(var(--h) 40% 30%); }
+}
+:root[data-theme="dark"] .chan { color: hsl(var(--h) 60% 80%); background: hsl(var(--h) 40% 18%); border-color: hsl(var(--h) 40% 30%); }
+
+/* Filtro por número en la bandeja */
+.channel-filter { display: flex; gap: 6px; align-items: center; }
+.channel-filter .select { flex: 1; min-width: 0; font-size: 0.85rem; padding: 6px 28px 6px 10px; }
+
+/* Contactos: selección y menú por fila */
+.table td.sel, .table th.sel { width: 36px; padding-right: 0; }
+.table .row-actions { opacity: 0; transition: opacity 0.12s; }
+.table tr:hover .row-actions, .table tr:focus-within .row-actions { opacity: 1; }
+@media (hover: none) { .table .row-actions { opacity: 1; } }
+.table tr.selected td { background: var(--accent-soft); }
+.contacts-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.name-missing { color: var(--ink-faint); font-style: italic; }
+.name-missing .btn { margin-left: 6px; }
+
+/* Motivo de un mensaje fallido, explicado */
+.msg-error { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--crit-soft); color: var(--crit); font-size: 0.74rem; line-height: 1.4; white-space: normal; }
+.msg-error strong { font-weight: 700; }
+.name-missing .btn { font-style: normal; color: var(--accent); }

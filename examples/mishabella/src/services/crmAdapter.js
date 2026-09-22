@@ -1,5 +1,5 @@
 /**
- * Puente SamuelitoBot ↔ CRM ValleyTech.
+ * Puente Mishabella ↔ CRM ValleyTech.
  *
  * Dos modos, elegidos con la variable CRM_MODE:
  *

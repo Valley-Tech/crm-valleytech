@@ -30,6 +30,9 @@ export const CRM_MODE = (process.env.CRM_MODE || 'mirror').toLowerCase();
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || '').replace(/\/$/, '');
 const CRM_API_KEY = process.env.CRM_API_KEY;
 const CRM_SIGNING_SECRET = process.env.CRM_SIGNING_SECRET;
+// phone_number_id del número por el que envía este bot. Así el CRM sabe a qué
+// número (y a qué chatbot) pertenece cada chat aunque lo haya abierto el bot.
+const CRM_PHONE_NUMBER_ID = process.env.CRM_PHONE_NUMBER_ID || process.env.BUSINESS_PHONE || undefined;
 
 export const crmEnabled = Boolean(CRM_BASE_URL && CRM_API_KEY);
 if (!crmEnabled) console.warn('[crm] CRM_BASE_URL o CRM_API_KEY vacíos: el bot funciona sin CRM');
@@ -93,6 +96,7 @@ export async function recordSent(to, data, metaResponse) {
   try {
     await crm.post('/messages/record', {
       to,
+      phoneNumberId: CRM_PHONE_NUMBER_ID,
       ...message,
       waMessageId: metaResponse?.messages?.[0]?.id,
       sentAt: new Date().toISOString(),
@@ -131,7 +135,7 @@ export async function sendViaCrm(to, data) {
   const message = toCrmMessage(data);
   if (!message) return { ok: true, skipped: 'read' };
   try {
-    const { data: created } = await crm.post('/messages', { to, ...message });
+    const { data: created } = await crm.post('/messages', { to, phoneNumberId: CRM_PHONE_NUMBER_ID, ...message });
     return created;
   } catch (error) {
     const code = error.response?.data?.error?.code ?? error.response?.data?.code;
