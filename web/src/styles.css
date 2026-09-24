@@ -440,3 +440,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .msg-error { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--crit-soft); color: var(--crit); font-size: 0.74rem; line-height: 1.4; white-space: normal; }
 .msg-error strong { font-weight: 700; }
 .name-missing .btn { font-style: normal; color: var(--accent); }
+
+/* Audio que no carga */
+.audio-failed { display: flex; flex-direction: column; gap: 6px; font-size: 0.8rem; color: var(--crit); background: var(--crit-soft); padding: 8px 10px; border-radius: 8px; max-width: 320px; }
+.audio-failed .btn { font-size: 0.75rem; }

@@ -27,8 +27,10 @@ async function getS3() {
   if (s3Client) return s3Client;
   const { S3Client } = await loadS3Sdk();
   s3Client = new S3Client({
-    region: env.S3_REGION,
+    region: env.S3_REGION || 'auto',
     credentials: { accessKeyId: env.S3_ACCESS_KEY_ID, secretAccessKey: env.S3_SECRET_ACCESS_KEY },
+    // R2 / B2 / MinIO: endpoint propio y rutas por bucket.
+    ...(env.S3_ENDPOINT ? { endpoint: env.S3_ENDPOINT, forcePathStyle: true } : {}),
   });
   return s3Client;
 }

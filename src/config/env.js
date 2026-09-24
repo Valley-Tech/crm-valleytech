@@ -48,6 +48,10 @@ const schema = z.object({
   S3_REGION: z.string().optional().default(''),
   S3_ACCESS_KEY_ID: z.string().optional().default(''),
   S3_SECRET_ACCESS_KEY: z.string().optional().default(''),
+  // Para Cloudflare R2, Backblaze B2, MinIO…: URL del endpoint compatible con S3.
+  S3_ENDPOINT: z.string().optional().default(''),
+  // Convertir notas de voz (ogg/opus) a mp3 si hay ffmpeg. "false" para desactivar.
+  MEDIA_TRANSCODE_AUDIO: z.preprocess((v) => (v === undefined || v === '' ? true : String(v) !== 'false'), z.boolean()).default(true),
 
   BOT_PAUSE_MINUTES: z.coerce.number().int().positive().default(30),
   OUTBOUND_RATE_PER_SECOND: z.coerce.number().int().positive().default(20),

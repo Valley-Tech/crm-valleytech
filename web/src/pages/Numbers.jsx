@@ -11,7 +11,7 @@ function loadFacebookSdk(appId, version) {
   if (sdkPromise) return sdkPromise;
   sdkPromise = new Promise((resolve, reject) => {
     window.fbAsyncInit = () => {
-      window.FB.init({ appId, autoLogAppEvents: true, xfbml: false, version });
+      window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version });
       resolve(window.FB);
     };
     const script = document.createElement('script');
@@ -40,10 +40,13 @@ export default function Numbers() {
   const [webhook, setWebhook] = useState(null);
   const [orphans, setOrphans] = useState(0); // chats sin número asignado
   const [adopting, setAdopting] = useState(null);
+  const [pending, setPending] = useState([]); // WABAs compartidas por registro alojado, sin conectar
+  const [connectInitial, setConnectInitial] = useState({});
 
   const load = useCallback(() => {
     get('/api/integrations').then((d) => setItems(d.items)).catch((e) => toast(e.message, { error: true }));
     get('/api/inbox/channels').then((d) => setOrphans(d.withoutNumber ?? 0)).catch(() => {});
+    get('/api/integrations/pending-partners').then((d) => setPending(d.items ?? [])).catch(() => {});
   }, [toast]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -128,6 +131,24 @@ export default function Numbers() {
         <strong>Eco pausa bot:</strong> en un número en coexistencia, cada mensaje enviado desde la app de WhatsApp Business (por una persona o por la IA de Meta) llega como <em>eco</em>. Si activas esta opción, ese eco pausa el chatbot conectado por el Bot Gateway en esa conversación. Déjala apagada si el número usa la IA de Meta.
       </div>
 
+      {pending.length > 0 ? (
+        <div className="card pad">
+          <h3 style={{ margin: '0 0 6px' }}>Cuentas pendientes de conectar</h3>
+          <p className="small muted" style={{ margin: '0 0 10px' }}>Estos negocios completaron el registro insertado (alojado por Meta o desde otra web) y compartieron su cuenta de WhatsApp con ValleyTech, pero aún no están conectados en el CRM. En Business Manager → Cuentas → Cuentas de WhatsApp verás la WABA compartida: asígnala a tu usuario del sistema, genera un token y conéctala aquí.</p>
+          <div className="col" style={{ gap: 8 }}>
+            {pending.map((p) => (
+              <div key={p.wabaId} className="row between wrap" style={{ gap: 8 }}>
+                <span className="small"><span className="mono">WABA {p.wabaId}</span>{p.businessId ? <> · negocio <span className="mono">{p.businessId}</span></> : null} · {fmtDateTime(p.at)}</span>
+                <span className="row" style={{ gap: 6 }}>
+                  <Button size="sm" variant="primary" onClick={() => { setConnectInitial({ tab: 'manual', wabaId: p.wabaId }); setConnecting(true); }}>Conectar</Button>
+                  <Button size="sm" onClick={() => del(`/api/integrations/pending-partners/${p.wabaId}`).then(load).catch((e) => toast(e.message, { error: true }))}>Descartar</Button>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {orphans > 0 ? (
         <div className="card pad small" style={{ background: 'var(--warn-soft)', color: 'var(--warn)' }}>
           <strong>{orphans} chat{orphans === 1 ? '' : 's'} sin número asignado.</strong> Los abrió un chatbot en modo espejo antes de que el CRM supiera por qué número salían (o el número se eliminó). No se pueden responder desde la bandeja hasta asignarlos: usa <em>Asignar chats</em> en el número que corresponda. Con la versión 2.6 de los adaptadores (variable <span className="mono">CRM_PHONE_NUMBER_ID</span>) esto no vuelve a pasar.
@@ -147,7 +168,7 @@ export default function Numbers() {
         </Confirm>
       ) : null}
 
-      {connecting ? <ConnectModal config={config} onClose={() => setConnecting(false)} onDone={() => { setConnecting(false); load(); }} /> : null}
+      {connecting ? <ConnectModal config={config} initial={connectInitial} onClose={() => { setConnecting(false); setConnectInitial({}); }} onDone={() => { setConnecting(false); setConnectInitial({}); load(); }} /> : null}
       {diagnosing ? <DiagnoseModal integration={diagnosing} onClose={() => setDiagnosing(null)} onChanged={load} /> : null}
       {editing ? <CredentialsModal integration={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); load(); }} /> : null}
       {deleting ? <DeleteModal integration={deleting} siblings={(items ?? []).filter((x) => x.wabaId === deleting.wabaId && x.id !== deleting.id).length} onClose={() => setDeleting(null)} onDone={() => { setDeleting(null); load(); }} /> : null}
@@ -156,9 +177,12 @@ export default function Numbers() {
 }
 
 /* ========================================================================== */
-function ConnectModal({ config, onClose, onDone }) {
+function ConnectModal({ config, onClose, onDone, initial = {} }) {
   const toast = useToast();
-  const [tab, setTab] = useState(config?.embeddedSignupConfigId ? 'signup' : 'manual');
+  const [tab, setTab] = useState(initial.tab ?? (config?.embeddedSignupConfigId ? 'signup' : 'manual'));
+  const hostedUrl = config?.embeddedSignupConfigId
+    ? `https://business.facebook.com/messaging/whatsapp/onboard/?app_id=${encodeURIComponent(config.metaAppId)}&config_id=${encodeURIComponent(config.embeddedSignupConfigId)}`
+    : null;
   const [state, setState] = useState({ step: 'idle', detail: '' });
   const sessionRef = useRef({});
 
@@ -193,9 +217,12 @@ function ConnectModal({ config, onClose, onDone }) {
         override_default_response_type: true,
         extras: {
           setup: {},
-          // Coexistencia: Meta cambia el paso del número por "Conecta tu cuenta de la app de WhatsApp Business".
-          featureType: coexistence ? 'whatsapp_business_app_onboarding' : '',
           sessionInfoVersion: '3',
+          version: 'v4',
+          // Coexistencia: Meta cambia el paso del número por "Conecta tu cuenta de
+          // la app de WhatsApp Business". En el flujo estándar la clave NO se manda
+          // (igual que el código oficial del asistente de Meta).
+          ...(coexistence ? { featureType: 'whatsapp_business_app_onboarding' } : {}),
         },
       };
       // Para depurar con Meta: en la consola del navegador se ve exactamente qué se envía.
@@ -257,18 +284,23 @@ function ConnectModal({ config, onClose, onDone }) {
             {['loading', 'dialog', 'exchange', 'session'].includes(state.step) ? <span className="spinner" /> : null}
             <span className={`small ${state.step === 'error' ? '' : 'muted'}`} style={state.step === 'error' ? { color: 'var(--crit)' } : undefined}>{state.detail}</span>
           </div>
+          {tab === 'signup' && hostedUrl ? (
+            <div className="callout small" style={{ marginTop: 4 }}>
+              <strong>¿"Función no disponible" o el diálogo no abre?</strong> Usa el <a href={hostedUrl} target="_blank" rel="noreferrer">registro alojado por Meta</a>: la misma configuración, pero en una página de Meta (sin SDK ni dominio del CRM). Cuando el cliente termine, su cuenta aparece abajo en <em>Cuentas pendientes de conectar</em> y la conectas con un token de usuario del sistema. No sirve para coexistencia.
+            </div>
+          ) : null}
         </div>
       ) : (
-        <ManualForm onDone={onDone} />
+        <ManualForm onDone={onDone} initialWabaId={initial.wabaId ?? ''} />
       )}
     </Modal>
   );
 }
 
 /* ========================================================================== */
-function ManualForm({ onDone }) {
+function ManualForm({ onDone, initialWabaId = '' }) {
   const toast = useToast();
-  const [form, setForm] = useState({ wabaId: '', phoneNumberId: '', accessToken: '', isCoexistence: false, metaAppId: '', metaAppSecret: '' });
+  const [form, setForm] = useState({ wabaId: initialWabaId, phoneNumberId: '', accessToken: '', isCoexistence: false, metaAppId: '', metaAppSecret: '' });
   const [ownApp, setOwnApp] = useState(false);
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));

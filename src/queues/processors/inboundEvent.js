@@ -11,7 +11,7 @@ import {
 import { rankOf, serializeMessage } from '../../services/messaging.js';
 import { buildBotEvent, dispatchToBots } from '../../services/botGateway.js';
 import { syncRecipientFromMessage } from '../../services/campaigns.js';
-import { noteUnknownPhoneNumber, touchIntegrationActivity } from '../../services/webhookDiagnostics.js';
+import { noteUnknownPhoneNumber, touchIntegrationActivity, notePartnerAdded, clearPartnerAdded } from '../../services/webhookDiagnostics.js';
 import { describeMetaError } from '../../lib/metaErrors.js';
 
 const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
@@ -45,6 +45,16 @@ export default async function processInboundEvent(job) {
 
   const integration = await resolveIntegration({ entryId, value });
   if (!integration) {
+    // Un negocio nuevo compartió su WABA con nosotros (registro alojado por
+    // Meta o registro insertado fuera del CRM): todavía no existe integración,
+    // pero hay que recordarlo para poder conectarlo desde el panel.
+    if (field === 'account_update' && value?.event === 'PARTNER_ADDED') {
+      const wabaId = value?.waba_info?.waba_id ?? entryId;
+      const businessId = value?.waba_info?.owner_business_id ?? null;
+      await notePartnerAdded({ wabaId, businessId }).catch(() => {});
+      logger.info({ wabaId, businessId }, 'PARTNER_ADDED: WABA nueva compartida con el CRM, pendiente de conectar');
+      return { pending: 'partner_added', wabaId };
+    }
     const phoneNumberId = value?.metadata?.phone_number_id;
     logger.warn({ entryId, field, phoneNumberId }, 'Evento de un número o WABA no registrado: se descarta');
     await noteUnknownPhoneNumber(phoneNumberId, entryId).catch(() => {});
@@ -269,6 +279,8 @@ async function handleTemplateStatus(integration, value) {
 // ---------------------------------------------------------------------------
 async function handleAccountUpdate(integration, value) {
   const event = value?.event;
+
+  if (event === 'PARTNER_ADDED') await clearPartnerAdded(integration.wabaId).catch(() => {});
 
   if (event === 'PARTNER_REMOVED' || event === 'ACCOUNT_OFFBOARDED' || event === 'DISABLED_UPDATE') {
     await prisma.metaIntegration.update({

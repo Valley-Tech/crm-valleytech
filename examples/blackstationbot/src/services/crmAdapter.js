@@ -140,7 +140,7 @@ export async function sendViaCrm(to, data) {
   } catch (error) {
     const code = error.response?.data?.error?.code ?? error.response?.data?.code;
     if (error.response?.status === 409 && code === 'bot_paused') {
-      console.log(`[crm] ${to}: un agente tomó la conversación; el bot se calla`);
+      // console.log(`[crm] ${to}: un agente tomó la conversación; el bot se calla`);
       return null;
     }
     if (error.response?.status === 422) {

@@ -1,0 +1,5 @@
+# Railway (Nixpacks). ffmpeg es opcional: convierte las notas de voz de
+# WhatsApp (ogg/opus) a mp3 para que suenen también en iPhones con iOS < 18.4.
+# Si no quieres ffmpeg, borra este archivo: el CRM funciona igual (sirve el ogg).
+[phases.setup]
+aptPkgs = ["ffmpeg"]

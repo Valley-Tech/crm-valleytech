@@ -20,7 +20,7 @@ import {
 } from '../../whatsapp/embeddedSignup.js';
 import { metaCredentials } from '../../whatsapp/credentials.js';
 import { diagnoseIntegration } from '../../services/integrationDiagnostics.js';
-import { webhookDiagnostics } from '../../services/webhookDiagnostics.js';
+import { webhookDiagnostics, listPartnersAdded, clearPartnerAdded } from '../../services/webhookDiagnostics.js';
 import { invalidateWebhookSecrets } from '../../services/webhookSecrets.js';
 import env from '../../config/env.js';
 
@@ -146,6 +146,7 @@ router.post(
       },
     });
     invalidateWebhookSecrets();
+    await clearPartnerAdded(input.wabaId).catch(() => {});
 
     await recordAudit({
       tenantId: req.auth.tenantId,
@@ -264,6 +265,30 @@ router.get(
     });
     if (!integration) throw notFound('Integración no encontrada');
     res.json(await diagnoseIntegration(integration));
+  })
+);
+
+/**
+ * Negocios que completaron el registro insertado alojado por Meta (o desde
+ * otra web) y cuya WABA aún no está conectada a ningún cliente del CRM.
+ */
+router.get(
+  '/integrations/pending-partners',
+  asyncHandler(async (req, res) => {
+    const pending = await listPartnersAdded();
+    const connected = pending.length
+      ? await prisma.metaIntegration.findMany({ where: { wabaId: { in: pending.map((p) => p.wabaId) } }, select: { wabaId: true } })
+      : [];
+    const done = new Set(connected.map((c) => c.wabaId));
+    res.json({ items: pending.filter((p) => !done.has(p.wabaId)) });
+  })
+);
+
+router.delete(
+  '/integrations/pending-partners/:wabaId',
+  asyncHandler(async (req, res) => {
+    await clearPartnerAdded(req.params.wabaId);
+    res.json({ ok: true });
   })
 );
 

@@ -3,7 +3,8 @@ FROM node:20-alpine
 WORKDIR /app
 
 # Prisma necesita OpenSSL presente para detectar la plataforma correctamente.
-RUN apk add --no-cache openssl
+# ffmpeg es opcional (notas de voz ogg → mp3 para iPhones viejos).
+RUN apk add --no-cache openssl ffmpeg
 
 COPY package*.json ./
 COPY prisma ./prisma

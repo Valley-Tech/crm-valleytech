@@ -15,7 +15,34 @@ import logger from '../lib/logger.js';
 const KEY_LAST = 'crm:webhook:last';
 const KEY_REJECTED = 'crm:webhook:last_rejected';
 const KEY_UNKNOWN = 'crm:webhook:unknown';
+// Negocios que completaron el registro insertado ALOJADO por Meta (o el
+// registro desde otra web) y aún no están conectados en ningún cliente.
+const KEY_PARTNERS = 'crm:webhook:partner_added';
 const TTL = 60 * 60 * 24 * 14; // dos semanas
+const TTL_PARTNERS = 60 * 60 * 24 * 30;
+
+/**
+ * account_update PARTNER_ADDED: un negocio compartió su WABA con ValleyTech
+ * (registro alojado por Meta, o registro insertado hecho fuera del CRM). Se
+ * guarda para que un administrador lo conecte desde Números de WhatsApp.
+ */
+export async function notePartnerAdded({ wabaId, businessId = null, event = 'PARTNER_ADDED' }) {
+  if (!wabaId) return;
+  await redis.hset(KEY_PARTNERS, wabaId, JSON.stringify({ wabaId, businessId, event, at: new Date().toISOString() }));
+  await redis.expire(KEY_PARTNERS, TTL_PARTNERS);
+}
+
+export async function listPartnersAdded() {
+  const raw = await redis.hgetall(KEY_PARTNERS);
+  return Object.values(raw ?? {})
+    .map((v) => { try { return JSON.parse(v); } catch { return null; } })
+    .filter(Boolean)
+    .sort((a, b) => (a.at < b.at ? 1 : -1));
+}
+
+export async function clearPartnerAdded(wabaId) {
+  await redis.hdel(KEY_PARTNERS, wabaId);
+}
 
 export async function noteWebhookReceived({ body, jobs = 0, rejected = null }) {
   const at = new Date().toISOString();

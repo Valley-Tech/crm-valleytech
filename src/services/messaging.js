@@ -145,8 +145,10 @@ export function serializeMessage(message) {
     errorCode: message.errorCode,
     errorMessage: message.errorMessage,
     mediaStorageKey: message.mediaStorageKey,
+    mediaId: message.mediaId,
     mediaMimeType: message.mediaMimeType,
     mediaFilename: message.mediaFilename,
+    mediaSizeBytes: message.mediaSizeBytes,
     sentByUserId: message.sentByUserId,
     createdAt: message.createdAt,
   };

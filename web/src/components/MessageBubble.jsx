@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { mediaUrl } from '../api.js';
 import { fmtTime, STATUS_LABEL } from './ui.jsx';
 import { I } from './Icons.jsx';
@@ -14,11 +14,49 @@ const MEDIA = new Set(['image', 'video', 'audio', 'document', 'sticker']);
 const money = (amount, currency) =>
   amount == null ? '' : new Intl.NumberFormat('es-CO', { style: 'currency', currency: currency || 'COP', maximumFractionDigits: 0 }).format(amount);
 
+/**
+ * Reproductor de audio con estado de error legible. Si el archivo no carga
+ * (se perdió del servidor, formato no soportado…), en vez del "Error" mudo del
+ * navegador muestra el motivo, un botón para reintentar y la descarga.
+ */
+function AudioPlayer({ src, voice = false }) {
+  const [attempt, setAttempt] = useState(0);
+  const [failed, setFailed] = useState(null);
+  const url = attempt ? `${src}&r=${attempt}` : src;
+
+  if (failed) {
+    return (
+      <div className="audio-failed">
+        <span>{failed}</span>
+        <span className="row" style={{ gap: 6 }}>
+          <button type="button" className="btn sm" onClick={() => { setFailed(null); setAttempt((a) => a + 1); }}>Reintentar</button>
+          <a className="btn sm" href={url} download>Descargar</a>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <audio
+      key={url}
+      src={url}
+      controls
+      preload="metadata"
+      title={voice ? 'Nota de voz' : 'Audio'}
+      onError={(e) => {
+        const code = e.currentTarget?.error?.code;
+        // 4 = formato no soportado o archivo no disponible (404); 2 = red.
+        setFailed(code === 4 ? 'No se pudo cargar el audio: el archivo no está disponible o este navegador no reproduce el formato.' : 'No se pudo cargar el audio (error de red).');
+      }}
+    />
+  );
+}
+
 function Media({ message, raw }) {
   const type = message.type;
   const info = raw?.[type] ?? message.content?.media ?? {};
   const caption = info.caption ?? null;
-  const hasFile = Boolean(message.mediaStorageKey);
+  // Con id de Meta basta: si el archivo no está en el servidor, el CRM lo vuelve a pedir.
+  const hasFile = Boolean(message.mediaStorageKey || message.mediaId);
   const src = hasFile ? mediaUrl(message.id) : info.link ?? null;
   const filename = message.mediaFilename ?? info.filename ?? 'archivo';
 
@@ -50,7 +88,7 @@ function Media({ message, raw }) {
     );
   }
   if (type === 'audio') {
-    return <audio src={src} controls preload="none" />;
+    return <AudioPlayer src={src} voice={Boolean(info.voice)} />;
   }
   return (
     <a className="doc" href={src} target="_blank" rel="noreferrer" download={filename}>
