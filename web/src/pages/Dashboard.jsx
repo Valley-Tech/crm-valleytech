@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { get } from '../api.js';
 import { useToast } from '../store.jsx';
-import { Badge, Chips, Loading, fmtDuration, CONV_STATUS } from '../components/ui.jsx';
+import { Badge, Chips, Loading, fmtDuration, CONV_STATUS, numberLabel } from '../components/ui.jsx';
 import { GroupedBars, HBars } from '../components/Charts.jsx';
 
 const RANGES = [{ value: 7, label: '7 días' }, { value: 30, label: '30 días' }, { value: 90, label: '90 días' }];
@@ -20,15 +20,21 @@ export default function Dashboard() {
   const toast = useToast();
   const [days, setDays] = useState(30);
   const [data, setData] = useState(null);
+  const [numbers, setNumbers] = useState([]);
+  const [numberId, setNumberId] = useState('');
+
+  useEffect(() => {
+    get('/api/inbox/channels').then((d) => setNumbers(d.items)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const to = new Date();
     const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
     setData(null);
-    get(`/api/metrics/overview?from=${from.toISOString()}&to=${to.toISOString()}`)
+    get(`/api/metrics/overview?from=${from.toISOString()}&to=${to.toISOString()}${numberId ? `&integrationId=${numberId}` : ''}`)
       .then(setData)
       .catch((e) => toast(e.message, { error: true }));
-  }, [days, toast]);
+  }, [days, numberId, toast]);
 
   // Rellena los días sin mensajes para que la gráfica no salte.
   const daily = useMemo(() => {
@@ -43,15 +49,27 @@ export default function Dashboard() {
     return out;
   }, [data, days]);
 
-  if (!data) return <Loading />;
+  const head = (
+    <div className="page-head">
+      <p>Actividad del periodo. Las conversaciones abiertas y pendientes son el estado actual, no el periodo.</p>
+      <div className="row wrap">
+        {numbers.length > 1 ? (
+          <select id="dashboard-number" className="select" value={numberId} onChange={(e) => setNumberId(e.target.value)} style={{ maxWidth: 300 }}>
+            <option value="">Todos mis chatbots</option>
+            {numbers.map((n) => <option key={n.id} value={n.id}>{numberLabel(n)}</option>)}
+          </select>
+        ) : null}
+        <Chips value={days} onChange={setDays} items={RANGES} />
+      </div>
+    </div>
+  );
+
+  if (!data) return <>{head}<Loading /></>;
   const t = data.totals;
 
   return (
     <>
-      <div className="page-head">
-        <p>Actividad del periodo. Las conversaciones abiertas y pendientes son el estado actual, no el periodo.</p>
-        <Chips value={days} onChange={setDays} items={RANGES} />
-      </div>
+      {head}
 
       <div className="grid cols-4">
         <KPI value={t.conversations} label="Conversaciones nuevas" detail={`${t.open} abiertas · ${t.pending} pendientes ahora`} />
@@ -93,11 +111,12 @@ export default function Dashboard() {
         <div className="card-head"><h3>Salud de los números</h3></div>
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>Número</th><th>Nombre</th><th>Calidad</th><th>Límite</th><th>Modo</th><th>Estado</th></tr></thead>
+            <thead><tr><th>Número</th><th>Chatbot</th><th>Nombre</th><th>Calidad</th><th>Límite</th><th>Modo</th><th>Estado</th></tr></thead>
             <tbody>
               {data.integrations.map((i) => (
                 <tr key={i.id}>
                   <td className="mono">{i.displayPhoneNumber}</td>
+                  <td>{i.bots?.length ? i.bots.map((b) => b.name).join(', ') : <span className="faint">—</span>}</td>
                   <td>{i.verifiedName ?? '—'}</td>
                   <td>{i.qualityRating ? <Badge tone={{ GREEN: 'ok', YELLOW: 'warn', RED: 'crit' }[i.qualityRating] ?? ''}>{i.qualityRating}</Badge> : '—'}</td>
                   <td className="mono small">{i.messagingTier ?? '—'}</td>
@@ -105,7 +124,7 @@ export default function Dashboard() {
                   <td>{i.active ? <Badge tone="ok">activo</Badge> : <Badge tone="crit">inactivo</Badge>}</td>
                 </tr>
               ))}
-              {data.integrations.length === 0 ? <tr><td colSpan={6} className="muted">Sin números conectados</td></tr> : null}
+              {data.integrations.length === 0 ? <tr><td colSpan={7} className="muted">Sin números asignados</td></tr> : null}
             </tbody>
           </table>
         </div>

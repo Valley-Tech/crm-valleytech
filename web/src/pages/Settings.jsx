@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { get, post, patch, del } from '../api.js';
-import { useAuth, useToast, hasRole } from '../store.jsx';
+import { useAuth, useToast, hasRole, roleLabel } from '../store.jsx';
 import { Button, Empty, Field, Loading, Modal } from '../components/ui.jsx';
 import { I } from '../components/Icons.jsx';
 
@@ -49,7 +49,7 @@ export default function Settings() {
           <div className="card pad col">
             <h3>Tu cuenta</h3>
             <div className="small"><span className="muted">Cliente:</span> {user.tenant?.name} · <span className="muted">plan</span> {user.tenant?.plan}</div>
-            <div className="small"><span className="muted">Usuario:</span> {user.name} ({user.email}) · rol {user.role}</div>
+            <div className="small"><span className="muted">Usuario:</span> {user.name} ({user.email}) · rol {roleLabel(user.role)}</div>
             <div className="small"><span className="muted">URL pública:</span> <code>{config?.publicUrl}</code></div>
             <div className="small"><span className="muted">Webhook de Meta:</span> <code>{config?.publicUrl}/webhooks/meta</code></div>
           </div>

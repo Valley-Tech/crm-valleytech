@@ -9,6 +9,7 @@ import quickReplyRoutes from './quickReplies.routes.js';
 import metricsRoutes from './metrics.routes.js';
 import campaignRoutes from './campaigns.routes.js';
 import adminRoutes from './admin.routes.js';
+import usersRoutes from './users.routes.js';
 import knowledgeRoutes from './knowledge.routes.js';
 
 const router = Router();
@@ -28,6 +29,7 @@ router.use('/api', templateRoutes);
 router.use('/api', quickReplyRoutes);
 router.use('/api', metricsRoutes);
 router.use('/api', campaignRoutes);
+router.use('/api', usersRoutes);
 router.use('/api', adminRoutes);
 router.use('/api', knowledgeRoutes);
 

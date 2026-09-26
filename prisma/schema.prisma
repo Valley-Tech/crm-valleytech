@@ -27,7 +27,12 @@ enum Channel {
   instagram
 }
 
+// superadmin: dueño del CRM (ValleyTech); ve y configura todo.
+// owner (Dueño): dueño de un chatbot; solo ve lo de sus números asignados.
+// admin (Administrador): como el dueño y además gestiona usuarios de sus números.
+// agent / viewer: atienden o miran, siempre dentro de sus números asignados.
 enum UserRole {
+  superadmin
   owner
   admin
   agent
@@ -149,10 +154,31 @@ model User {
   notes                 ConversationNote[]
   auditLogs             AuditLog[]
   campaigns             Campaign[]
+  // Números de WhatsApp (y por tanto chatbots) que este usuario puede ver.
+  // Un superadmin no necesita filas aquí: lo ve todo.
+  integrations          UserIntegration[]
 
   @@unique([tenantId, email])
   @@index([tenantId])
   @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// UserIntegration: qué números de WhatsApp administra cada usuario.
+// Todo lo que ve un dueño/administrador/agente (bandeja, contactos, campañas,
+// plantillas, dashboard) se filtra por estas filas.
+// ---------------------------------------------------------------------------
+model UserIntegration {
+  userId        String   @map("user_id")
+  integrationId String   @map("integration_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  integration MetaIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@id([userId, integrationId])
+  @@index([integrationId])
+  @@map("user_integrations")
 }
 
 // ---------------------------------------------------------------------------
@@ -190,6 +216,7 @@ model MetaIntegration {
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversations Conversation[]
+  users         UserIntegration[]
   campaigns     Campaign[]
   bots          BotIntegration[]
 
@@ -381,13 +408,13 @@ model ConversationNote {
   id             String   @id @default(uuid())
   tenantId       String   @map("tenant_id")
   conversationId String   @map("conversation_id")
-  userId         String   @map("user_id")
+  userId         String?  @map("user_id")
   body           String
   createdAt      DateTime @default(now()) @map("created_at")
 
   tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([conversationId, createdAt])
   @@map("conversation_notes")
@@ -410,7 +437,9 @@ model Template {
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, name, language])
+  // Una plantilla pertenece a una WABA: dos números con WABA distinta pueden
+  // tener plantillas con el mismo nombre (p. ej. pedido_nuevo).
+  @@unique([tenantId, wabaId, name, language])
   @@index([tenantId, status])
   @@map("templates")
 }

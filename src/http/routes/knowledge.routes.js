@@ -19,7 +19,7 @@ import { NATIVE_MIME, IMAGE_MIME, MODEL_FALLBACKS, mimeFromName } from '../../ai
  */
 
 const router = Router();
-router.use(requireAuth, requireRole('admin'));
+router.use(requireAuth, requireRole('superadmin'));
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_BYTES, files: 10 } });
 

@@ -5,6 +5,7 @@ import { asyncHandler } from '../../lib/http.js';
 import { notFound } from '../../lib/errors.js';
 import { requireAuthAllowQueryToken } from '../middleware/auth.js';
 import { loadMedia } from '../../services/media.js';
+import { messageWhere } from '../../services/access.js';
 
 const router = Router();
 
@@ -22,7 +23,7 @@ router.get(
   requireAuthAllowQueryToken,
   asyncHandler(async (req, res) => {
     const message = await prisma.message.findFirst({
-      where: { id: req.params.messageId, tenantId: req.auth.tenantId },
+      where: { id: req.params.messageId, tenantId: req.auth.tenantId, ...messageWhere(req.auth.scope) },
       include: { conversation: true },
     });
     if (!message?.mediaStorageKey && !message?.mediaId) throw notFound('Ese mensaje no tiene un archivo guardado');

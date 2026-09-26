@@ -243,6 +243,9 @@ export function channelLabel({ bot, integration } = {}) {
  * Chip de color con el chatbot y el número del negocio.
  * Sin número asignado muestra "sin número" en rojo (no se puede responder).
  */
+/** "SamuelitoBot · +57 311 3328433" para un número de WhatsApp (con su chatbot). */
+export const numberLabel = (n) => `${n?.bots?.length ? n.bots.map((b) => b.name).join(', ') : n?.verifiedName || 'Sin chatbot'} · ${n?.displayPhoneNumber ?? ''}`;
+
 export function ChannelTag({ bot, integration, full = false, className = '' }) {
   if (!integration && !bot) {
     return <span className={`chan none ${className}`} title="Este chat no tiene número de WhatsApp asignado">sin número</span>;

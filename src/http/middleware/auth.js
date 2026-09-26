@@ -3,6 +3,7 @@ import env from '../../config/env.js';
 import prisma from '../../lib/prisma.js';
 import { hashApiKey } from '../../lib/crypto.js';
 import { unauthorized, forbidden } from '../../lib/errors.js';
+import { loadAccess, roleAtLeast, ROLE_LABEL } from '../../services/access.js';
 
 export function signToken(user) {
   return jwt.sign(
@@ -12,20 +13,32 @@ export function signToken(user) {
   );
 }
 
+/**
+ * Verifica el JWT y carga el alcance del usuario desde la base de datos
+ * (rol vigente, números asignados). Así un cambio de rol, una asignación nueva
+ * o una desactivación se aplican de inmediato, sin esperar a un nuevo login.
+ */
+async function authenticate(token) {
+  let claims;
+  try {
+    claims = jwt.verify(String(token), env.JWT_SECRET);
+  } catch {
+    throw unauthorized('Sesión inválida o expirada');
+  }
+  const access = await loadAccess(claims.sub);
+  if (!access || access.tenantId !== claims.tenantId) throw unauthorized('Tu usuario ya no tiene acceso; inicia sesión de nuevo');
+  return { userId: access.userId, tenantId: access.tenantId, role: access.role, email: access.email, name: access.name, scope: access.scope };
+}
+
 /** Autenticación de agentes y administradores del CRM. */
 export function requireAuth(req, res, next) {
   const header = req.get('Authorization') ?? '';
   const [scheme, token] = header.split(' ');
-
   if (scheme !== 'Bearer' || !token) return next(unauthorized('Falta la cabecera Authorization'));
 
-  try {
-    const claims = jwt.verify(token, env.JWT_SECRET);
-    req.auth = { userId: claims.sub, tenantId: claims.tenantId, role: claims.role, email: claims.email };
-    next();
-  } catch {
-    next(unauthorized('Sesión inválida o expirada'));
-  }
+  authenticate(token)
+    .then((auth) => { req.auth = auth; next(); })
+    .catch(next);
 }
 
 /**
@@ -40,23 +53,19 @@ export function requireAuthAllowQueryToken(req, res, next) {
   const token = req.query?.token;
   if (!token) return next(unauthorized('Falta el token'));
 
-  try {
-    const claims = jwt.verify(String(token), env.JWT_SECRET);
-    req.auth = { userId: claims.sub, tenantId: claims.tenantId, role: claims.role, email: claims.email };
-    next();
-  } catch {
-    next(unauthorized('Sesión inválida o expirada'));
-  }
+  authenticate(token)
+    .then((auth) => { req.auth = auth; next(); })
+    .catch(next);
 }
 
-const ROLE_ORDER = { viewer: 0, agent: 1, admin: 2, owner: 3 };
-
-/** Exige un rol mínimo. requireRole('admin') deja pasar a admin y owner. */
+/**
+ * Exige un rol mínimo. Orden: viewer < agent < owner (Dueño) < admin
+ * (Administrador) < superadmin. requireRole('admin') deja pasar a admin y superadmin.
+ */
 export function requireRole(minimum) {
   return (req, res, next) => {
-    const current = ROLE_ORDER[req.auth?.role] ?? -1;
-    if (current < (ROLE_ORDER[minimum] ?? 99)) {
-      return next(forbidden(`Se requiere el rol ${minimum} o superior`));
+    if (!roleAtLeast(req.auth?.role, minimum)) {
+      return next(forbidden(`Se requiere el rol ${ROLE_LABEL[minimum] ?? minimum} o superior`));
     }
     next();
   };
@@ -79,7 +88,7 @@ export async function requireBot(req, res, next) {
     if (!bot || !bot.active) return next(unauthorized('API key de bot inválida o inactiva'));
 
     req.bot = bot;
-    req.auth = { tenantId: bot.tenantId, role: 'bot' };
+    req.auth = { tenantId: bot.tenantId, role: 'bot', scope: { all: true, integrationIds: null, wabaIds: null } };
     next();
   } catch (err) {
     next(err);

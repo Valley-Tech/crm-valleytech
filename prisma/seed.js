@@ -34,7 +34,7 @@ async function main() {
       email: EMAIL,
       name: 'Administrador',
       passwordHash: await hashPassword(PASSWORD),
-      role: 'owner',
+      role: 'superadmin',
     },
   });
 

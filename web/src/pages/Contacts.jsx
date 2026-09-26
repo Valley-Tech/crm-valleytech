@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { get, patch, del, post } from '../api.js';
 import { useRouter } from '../router.jsx';
 import { useAuth, useToast, hasRole } from '../store.jsx';
-import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Menu, Confirm, ChannelTag, fmtDateTime, fmtPhone, CONV_STATUS } from '../components/ui.jsx';
+import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Menu, Confirm, ChannelTag, fmtDateTime, fmtPhone, CONV_STATUS, numberLabel } from '../components/ui.jsx';
 import { I } from '../components/Icons.jsx';
 
 /**
@@ -20,6 +20,8 @@ export default function Contacts({ params }) {
   const canWrite = hasRole(user, 'agent');
   const [q, setQ] = useState('');
   const [tag, setTag] = useState('');
+  const [numbers, setNumbers] = useState([]);
+  const [numberId, setNumberId] = useState('');
   const [data, setData] = useState(null);
   const [offset, setOffset] = useState(0);
   const [selectMode, setSelectMode] = useState(false);
@@ -29,10 +31,14 @@ export default function Contacts({ params }) {
   const [busy, setBusy] = useState(false);
   const limit = 50;
 
+  useEffect(() => {
+    get('/api/inbox/channels').then((d) => setNumbers(d.items)).catch(() => {});
+  }, []);
+
   const load = useCallback(() => {
-    const qs = [`limit=${limit}`, `offset=${offset}`, q ? `q=${encodeURIComponent(q)}` : '', tag ? `tag=${encodeURIComponent(tag)}` : ''].filter(Boolean).join('&');
+    const qs = [`limit=${limit}`, `offset=${offset}`, q ? `q=${encodeURIComponent(q)}` : '', tag ? `tag=${encodeURIComponent(tag)}` : '', numberId ? `integrationId=${numberId}` : ''].filter(Boolean).join('&');
     get(`/api/contacts?${qs}`).then(setData).catch((e) => toast(e.message, { error: true }));
-  }, [q, tag, offset, toast]);
+  }, [q, tag, numberId, offset, toast]);
   useEffect(() => { load(); }, [load]);
 
   const labelOf = (c) => c.name || fmtPhone(c.waId);
@@ -68,6 +74,12 @@ export default function Contacts({ params }) {
         <div className="row wrap">
           <input id="contacts-search" className="input" style={{ width: 280 }} type="search" placeholder="Buscar por nombre o número" value={q} onChange={(e) => { setOffset(0); setQ(e.target.value); }} />
           <input className="input" style={{ width: 180 }} placeholder="Filtrar por etiqueta" value={tag} onChange={(e) => { setOffset(0); setTag(e.target.value.trim().toLowerCase()); }} />
+          {numbers.length > 1 ? (
+            <select id="contacts-number" className="select" style={{ maxWidth: 260 }} value={numberId} onChange={(e) => { setOffset(0); setNumberId(e.target.value); }}>
+              <option value="">Todos mis chatbots</option>
+              {numbers.map((n) => <option key={n.id} value={n.id}>{numberLabel(n)}</option>)}
+            </select>
+          ) : null}
         </div>
         <div className="row" style={{ gap: 8 }}>
           {selectMode ? (

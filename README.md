@@ -120,7 +120,7 @@ y no al CRM. Ver `examples/valleytechbot/` para resolverlo sin apagar el bot.
 | **Dashboard** | Conversaciones, mensajes por día, primera respuesta (mediana), embudo, agentes, plantillas por categoría, salud de los números. |
 | **Números** | Conectar por **registro insertado** (cuenta nueva o propia), por **coexistencia** (cuenta que ya usa la app) o **manual**. Calidad, límite, modo, interruptores. |
 | **Chatbots** | Registrar bots del Bot Gateway desde la interfaz; credenciales se muestran una sola vez. |
-| **Equipo** | Usuarios, roles, activación y cambio de contraseña. |
+| **Usuarios** | Quién entra al CRM, con qué rol y **qué chatbots (números) administra**. Un Dueño solo ve la bandeja, los contactos, las campañas, las plantillas y el dashboard de sus números; el SuperAdmin lo ve todo. |
 | **Ajustes** | Respuestas rápidas y enlaces a las páginas legales (`/privacidad`, `/terminos`). |
 
 ### Registro insertado (Embedded Signup)
@@ -288,13 +288,16 @@ Todo bajo `/api` exige `Authorization: Bearer <token>` salvo el login.
 | GET/POST | `/api/conversations/:id/notes` | agente |
 | GET | `/api/media/:messageId` | cualquiera (acepta `?token=`) |
 | GET/PATCH | `/api/contacts` | agente |
-| GET/POST | `/api/integrations` · `/api/integrations/meta` | admin |
-| GET/POST | `/api/templates` · `/api/templates/sync` | admin |
-| GET/POST/PATCH/DELETE | `/api/bots` | admin |
-| GET/POST | `/api/users` | admin |
-| GET | `/api/usage/summary` | admin |
+| GET/POST | `/api/integrations` · `/api/integrations/meta` | superadmin |
+| GET/POST | `/api/templates` · `/api/templates/sync` | lector / dueño (solo sus números) |
+| GET/POST/PATCH/DELETE | `/api/campaigns` | dueño (solo sus números) |
+| GET/POST/PATCH/DELETE | `/api/bots` · `/api/bots/:id/ai` | superadmin |
+| GET/POST/PATCH/DELETE | `/api/users` · `/api/users/options` | admin (sus números) / superadmin (todos) |
+| GET | `/api/usage/summary` | superadmin |
 
-Roles, de menor a mayor: `viewer` → `agent` → `admin` → `owner`.
+Roles, de menor a mayor: `viewer` (Lector) → `agent` (Agente) → `owner` (Dueño de chatbot) → `admin` (Administrador: además gestiona usuarios) → `superadmin` (dueño del CRM: ve y configura todo).
+
+Todo usuario que no es `superadmin` tiene **números asignados** (tabla `user_integrations`, se marcan en Usuarios). Cada consulta —bandeja, contactos, campañas, plantillas, métricas, multimedia y eventos en tiempo real— se filtra por esos números. Sin asignaciones no ve nada. El rol y los números se leen de la base de datos en cada petición (caché de 15 s), así que un cambio surte efecto sin volver a iniciar sesión.
 
 ---
 

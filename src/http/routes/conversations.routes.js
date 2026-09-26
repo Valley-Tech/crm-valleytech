@@ -4,7 +4,7 @@ import { z } from 'zod';
 import prisma from '../../lib/prisma.js';
 import logger from '../../lib/logger.js';
 import { asyncHandler } from '../../lib/http.js';
-import { notFound, badRequest } from '../../lib/errors.js';
+import { notFound, badRequest, forbidden } from '../../lib/errors.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendOutbound, serializeMessage } from '../../services/messaging.js';
 import {
@@ -20,6 +20,7 @@ import { uploadMedia } from '../../whatsapp/media.js';
 import { markAsRead } from '../../whatsapp/messages.js';
 import { putObject, deleteObject } from '../../storage/index.js';
 import { metaCredentials } from '../../whatsapp/credentials.js';
+import { integrationWhere, contactWhere, metaIntegrationWhere, botWhere, canSeeIntegration } from '../../services/access.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
 
@@ -34,10 +35,13 @@ function mediaTypeFor(mimeType = '') {
 const router = Router();
 router.use(requireAuth);
 
-/** Toda consulta parte del tenant del token. Nunca se acepta uno del cliente. */
+/**
+ * Toda consulta parte del tenant del token y del alcance del usuario (sus
+ * números asignados). Nunca se acepta un tenant del cliente.
+ */
 async function loadConversation(req) {
   const conversation = await prisma.conversation.findFirst({
-    where: { id: req.params.id, tenantId: req.auth.tenantId },
+    where: { id: req.params.id, tenantId: req.auth.tenantId, ...integrationWhere(req.auth.scope) },
     include: { contact: true, assignedUser: { select: { id: true, name: true } }, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
   });
   if (!conversation) throw notFound('Conversación no encontrada');
@@ -48,9 +52,9 @@ async function loadConversation(req) {
  * Chatbots activos del cliente, para saber cuál atiende cada conversación.
  * Un bot atiende un número concreto (metaIntegrationId) o todos (null).
  */
-async function loadBots(tenantId) {
+async function loadBots(tenantId, scope = { all: true }) {
   return prisma.botIntegration.findMany({
-    where: { tenantId, active: true },
+    where: { tenantId, active: true, ...botWhere(scope) },
     select: { id: true, name: true, metaIntegrationId: true },
     orderBy: { createdAt: 'asc' },
   });
@@ -102,8 +106,8 @@ function serializeConversation(conversation, bots = []) {
 }
 
 /** Serializa con el chatbot resuelto (una consulta de bots por llamada). */
-async function serializeFull(tenantId, conversation) {
-  return serializeConversation(conversation, await loadBots(tenantId));
+async function serializeFull(tenantId, conversation, scope) {
+  return serializeConversation(conversation, await loadBots(tenantId, scope));
 }
 
 // ---------------------------------------------------------------------------
@@ -128,8 +132,12 @@ router.get(
   asyncHandler(async (req, res) => {
     const { status, assignedUserId, unassigned, botActive, unread, stage, integrationId, q, limit, offset } = listQuery.parse(req.query);
 
+    if (integrationId && !canSeeIntegration(req.auth.scope, integrationId === 'none' ? null : integrationId)) {
+      throw forbidden('Ese número no está entre los que administras');
+    }
     const where = {
       tenantId: req.auth.tenantId,
+      ...integrationWhere(req.auth.scope),
       ...(integrationId ? { integrationId: integrationId === 'none' ? null : integrationId } : {}),
       ...(status ? { status } : {}),
       ...(assignedUserId ? { assignedUserId } : {}),
@@ -158,7 +166,7 @@ router.get(
         skip: offset,
       }),
       prisma.conversation.count({ where }),
-      loadBots(req.auth.tenantId),
+      loadBots(req.auth.tenantId, req.auth.scope),
     ]);
 
     res.json({ items: items.map((c) => serializeConversation(c, bots)), total, limit, offset });
@@ -175,12 +183,13 @@ router.get(
   asyncHandler(async (req, res) => {
     const [integrations, bots, orphans] = await Promise.all([
       prisma.metaIntegration.findMany({
-        where: { tenantId: req.auth.tenantId },
-        select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true, channel: true },
+        where: { tenantId: req.auth.tenantId, ...metaIntegrationWhere(req.auth.scope) },
+        select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true, channel: true, wabaId: true },
         orderBy: { connectedAt: 'asc' },
       }),
-      loadBots(req.auth.tenantId),
-      prisma.conversation.count({ where: { tenantId: req.auth.tenantId, integrationId: null } }),
+      loadBots(req.auth.tenantId, req.auth.scope),
+      // Los chats sin número solo los ve el superadmin (no se sabe de quién son).
+      req.auth.scope.all ? prisma.conversation.count({ where: { tenantId: req.auth.tenantId, integrationId: null } }) : Promise.resolve(0),
     ]);
     const forAll = bots.filter((b) => !b.metaIntegrationId).map((b) => ({ id: b.id, name: b.name }));
     res.json({
@@ -194,10 +203,31 @@ router.get(
   })
 );
 
+/**
+ * Usuarios a los que se puede asignar un chat: los que ven alguno de los
+ * números del que pregunta (o todos, si es superadmin). Sin correos ni roles
+ * sensibles: solo lo que necesita el selector "Asignar a".
+ */
+router.get(
+  '/agents',
+  asyncHandler(async (req, res) => {
+    const where = { tenantId: req.auth.tenantId, active: true };
+    if (!req.auth.scope.all) {
+      where.OR = [{ role: 'superadmin' }, { integrations: { some: { integrationId: { in: req.auth.scope.integrationIds } } } }];
+    }
+    const items = await prisma.user.findMany({
+      where,
+      select: { id: true, name: true, role: true, integrations: { select: { integrationId: true } } },
+      orderBy: { name: 'asc' },
+    });
+    res.json({ items: items.map((u) => ({ id: u.id, name: u.name, role: u.role, integrationIds: u.role === 'superadmin' ? null : u.integrations.map((r) => r.integrationId) })) });
+  })
+);
+
 router.get(
   '/conversations/:id',
   asyncHandler(async (req, res) => {
-    res.json(await serializeFull(req.auth.tenantId, await loadConversation(req)));
+    res.json(await serializeFull(req.auth.tenantId, await loadConversation(req), req.auth.scope));
   })
 );
 
@@ -247,13 +277,13 @@ router.post(
     });
     await publishEvent({ tenantId: req.auth.tenantId, conversationId: conversation.id, type: 'conversation:cleared', payload: { id: conversation.id } });
 
-    res.json({ ...(await serializeFull(req.auth.tenantId, updated)), deletedMessages: deleted.count });
+    res.json({ ...(await serializeFull(req.auth.tenantId, updated, req.auth.scope)), deletedMessages: deleted.count });
   })
 );
 
 async function deleteConversations(req, ids) {
   const conversations = await prisma.conversation.findMany({
-    where: { id: { in: ids }, tenantId: req.auth.tenantId },
+    where: { id: { in: ids }, tenantId: req.auth.tenantId, ...integrationWhere(req.auth.scope) },
     select: { id: true },
   });
   const found = conversations.map((c) => c.id);
@@ -444,15 +474,19 @@ router.patch(
   '/conversations/:id',
   requireRole('agent'),
   asyncHandler(async (req, res) => {
-    await loadConversation(req);
+    const conversation = await loadConversation(req);
     const data = patchSchema.parse(req.body);
     if (Object.keys(data).length === 0) throw badRequest('No hay nada que actualizar');
 
     if (data.assignedUserId) {
       const agent = await prisma.user.findFirst({
         where: { id: data.assignedUserId, tenantId: req.auth.tenantId, active: true },
+        select: { id: true, role: true, integrations: { select: { integrationId: true } } },
       });
       if (!agent) throw badRequest('El agente indicado no existe en este cliente');
+      // Solo se asigna a quien puede ver este chat (por su número).
+      const sees = agent.role === 'superadmin' || (conversation.integrationId && agent.integrations.some((r) => r.integrationId === conversation.integrationId));
+      if (!sees) throw badRequest('Ese usuario no administra el número de este chat; asígnale el número en Usuarios primero');
     }
 
     const updated = await prisma.conversation.update({
@@ -470,7 +504,7 @@ router.patch(
       metadata: data,
     });
 
-    const serialized = await serializeFull(req.auth.tenantId, updated);
+    const serialized = await serializeFull(req.auth.tenantId, updated, req.auth.scope);
     await publishEvent({
       tenantId: req.auth.tenantId,
       conversationId: updated.id,
@@ -491,7 +525,7 @@ router.post(
       data: { unreadCount: 0 },
       include: { contact: true, assignedUser: { select: { id: true, name: true } }, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
     });
-    res.json(await serializeFull(req.auth.tenantId, updated));
+    res.json(await serializeFull(req.auth.tenantId, updated, req.auth.scope));
 
     // Los dos checks azules para el cliente. Mejor esfuerzo: no bloquea la respuesta.
     try {
@@ -586,8 +620,12 @@ router.get(
     const tag = req.query.tag ? String(req.query.tag) : undefined;
     const limit = Math.min(Number(req.query.limit ?? 50), 200);
     const offset = Number(req.query.offset ?? 0);
+    const integrationId = req.query.integrationId ? String(req.query.integrationId) : undefined;
+    if (integrationId && !canSeeIntegration(req.auth.scope, integrationId)) throw forbidden('Ese número no está entre los que administras');
     const where = {
       tenantId: req.auth.tenantId,
+      ...contactWhere(req.auth.scope),
+      ...(integrationId ? { conversations: { some: { integrationId } } } : {}),
       ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { waId: { contains: q } }] } : {}),
       ...(tag ? { tags: { has: tag } } : {}),
     };
@@ -598,8 +636,9 @@ router.get(
         take: limit,
         skip: offset,
         include: {
-          // Último chat del contacto: dice por qué número (y chatbot) llegó.
+          // Último chat del contacto (dentro de los números visibles): dice por qué número (y chatbot) llegó.
           conversations: {
+            where: integrationWhere(req.auth.scope),
             orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
             take: 1,
             select: { id: true, integrationId: true, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
@@ -607,7 +646,7 @@ router.get(
         },
       }),
       prisma.contact.count({ where }),
-      loadBots(req.auth.tenantId),
+      loadBots(req.auth.tenantId, req.auth.scope),
     ]);
     res.json({
       items: items.map(({ conversations, ...contact }) => {
@@ -630,9 +669,10 @@ router.get(
   '/contacts/:id',
   asyncHandler(async (req, res) => {
     const contact = await prisma.contact.findFirst({
-      where: { id: req.params.id, tenantId: req.auth.tenantId },
+      where: { id: req.params.id, tenantId: req.auth.tenantId, ...contactWhere(req.auth.scope) },
       include: {
         conversations: {
+          where: integrationWhere(req.auth.scope),
           orderBy: { createdAt: 'desc' },
           take: 20,
           select: { id: true, status: true, pipelineStage: true, lastMessageAt: true, lastMessagePreview: true, createdAt: true, integrationId: true, integration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
@@ -641,8 +681,8 @@ router.get(
     });
     if (!contact) throw notFound('Contacto no encontrado');
     const [messages, bots] = await Promise.all([
-      prisma.message.count({ where: { contactId: contact.id } }),
-      loadBots(req.auth.tenantId),
+      prisma.message.count({ where: { contactId: contact.id, conversation: integrationWhere(req.auth.scope) } }),
+      loadBots(req.auth.tenantId, req.auth.scope),
     ]);
     res.json({
       ...contact,
@@ -667,7 +707,7 @@ router.patch(
       .parse(req.body);
 
     const existing = await prisma.contact.findFirst({
-      where: { id: req.params.id, tenantId: req.auth.tenantId },
+      where: { id: req.params.id, tenantId: req.auth.tenantId, ...contactWhere(req.auth.scope) },
     });
     if (!existing) throw notFound('Contacto no encontrado');
 
@@ -700,12 +740,16 @@ router.patch(
  */
 async function deleteContacts(req, ids) {
   const contacts = await prisma.contact.findMany({
-    where: { id: { in: ids }, tenantId: req.auth.tenantId },
-    select: { id: true, waId: true, name: true, conversations: { select: { id: true } } },
+    where: { id: { in: ids }, tenantId: req.auth.tenantId, ...contactWhere(req.auth.scope) },
+    select: { id: true, waId: true, name: true, conversations: { select: { id: true, integrationId: true } } },
   });
   if (contacts.length === 0) return { deleted: 0, conversations: 0, files: 0 };
 
-  const conversationIds = contacts.flatMap((c) => c.conversations.map((x) => x.id));
+  // Un dueño solo borra los chats de SUS números. Si el contacto también
+  // chatea con otro chatbot, ese chat (y el contacto) se conservan.
+  const visible = (c) => canSeeIntegration(req.auth.scope, c.integrationId);
+  const conversationIds = contacts.flatMap((c) => c.conversations.filter(visible).map((x) => x.id));
+  const contactIds = contacts.filter((c) => c.conversations.every(visible)).map((c) => c.id);
   const messages = conversationIds.length
     ? await prisma.message.findMany({
         where: { conversationId: { in: conversationIds }, tenantId: req.auth.tenantId, mediaStorageKey: { not: null } },
@@ -715,7 +759,12 @@ async function deleteContacts(req, ids) {
   const files = await deleteMediaFiles(messages);
 
   // Conversaciones → mensajes y notas en cascada; destinatarios de campaña en cascada.
-  const result = await prisma.contact.deleteMany({ where: { id: { in: contacts.map((c) => c.id) }, tenantId: req.auth.tenantId } });
+  if (conversationIds.length) {
+    await prisma.conversation.deleteMany({ where: { id: { in: conversationIds }, tenantId: req.auth.tenantId } });
+  }
+  const result = contactIds.length
+    ? await prisma.contact.deleteMany({ where: { id: { in: contactIds }, tenantId: req.auth.tenantId } })
+    : { count: 0 };
 
   await recordAudit({
     tenantId: req.auth.tenantId,
@@ -723,7 +772,7 @@ async function deleteContacts(req, ids) {
     action: 'contact.delete',
     entity: 'contact',
     entityId: contacts.length === 1 ? contacts[0].id : null,
-    metadata: { contacts: contacts.map((c) => ({ id: c.id, waId: c.waId, name: c.name })), conversations: conversationIds.length, files },
+    metadata: { contacts: contacts.map((c) => ({ id: c.id, waId: c.waId, name: c.name })), conversations: conversationIds.length, files, kept: contacts.length - contactIds.length },
   });
   for (const id of conversationIds) {
     await publishEvent({ tenantId: req.auth.tenantId, conversationId: id, type: 'conversation:deleted', payload: { id } });
@@ -735,7 +784,7 @@ router.delete(
   '/contacts/:id',
   requireRole('agent'),
   asyncHandler(async (req, res) => {
-    const existing = await prisma.contact.findFirst({ where: { id: req.params.id, tenantId: req.auth.tenantId }, select: { id: true } });
+    const existing = await prisma.contact.findFirst({ where: { id: req.params.id, tenantId: req.auth.tenantId, ...contactWhere(req.auth.scope) }, select: { id: true } });
     if (!existing) throw notFound('Contacto no encontrado');
     res.json({ ok: true, ...(await deleteContacts(req, [existing.id])) });
   })

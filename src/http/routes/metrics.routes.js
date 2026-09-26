@@ -4,6 +4,8 @@ import prisma from '../../lib/prisma.js';
 import { asyncHandler } from '../../lib/http.js';
 import { badRequest } from '../../lib/errors.js';
 import { requireAuth } from '../middleware/auth.js';
+import { integrationWhere, messageWhere, contactWhere, metaIntegrationWhere, canSeeIntegration } from '../../services/access.js';
+import { forbidden } from '../../lib/errors.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -16,7 +18,8 @@ function parseRange(query) {
 }
 
 /**
- * Métricas del panel. Todo parte del tenant del token y del rango pedido.
+ * Métricas del panel. Todo parte del tenant del token, del alcance del usuario
+ * (sus números) y del rango pedido. ?integrationId= limita a un solo número.
  * Las series diarias van por SQL crudo: es la forma natural de agrupar por día.
  */
 router.get(
@@ -24,6 +27,19 @@ router.get(
   asyncHandler(async (req, res) => {
     const tenantId = req.auth.tenantId;
     const { from, to } = parseRange(req.query);
+
+    // Números que entran en el cálculo: los del usuario (o todos), o uno concreto.
+    const only = req.query.integrationId ? String(req.query.integrationId) : null;
+    if (only && !canSeeIntegration(req.auth.scope, only)) throw forbidden('Ese número no está entre los que administras');
+    const scope = only ? { all: false, integrationIds: [only], wabaIds: [] } : req.auth.scope;
+    const convW = integrationWhere(scope);
+    const msgW = messageWhere(scope);
+    const contactW = contactWhere(scope);
+    // Para el SQL crudo: lista de ids o NULL (= sin filtro).
+    const ids = scope.all ? null : scope.integrationIds;
+    const idFilter = ids
+      ? Prisma.sql`AND c.integration_id IN (${ids.length ? Prisma.join(ids) : Prisma.sql`NULL`})`
+      : Prisma.empty;
 
     const [
       conversationsTotal,
@@ -41,27 +57,28 @@ router.get(
       templateUsage,
       integrations,
     ] = await Promise.all([
-      prisma.conversation.count({ where: { tenantId, createdAt: { gte: from, lte: to } } }),
-      prisma.conversation.count({ where: { tenantId, status: 'open' } }),
-      prisma.conversation.count({ where: { tenantId, status: 'pending' } }),
-      prisma.message.count({ where: { tenantId, direction: 'inbound', createdAt: { gte: from, lte: to } } }),
-      prisma.message.count({ where: { tenantId, direction: 'outbound', createdAt: { gte: from, lte: to } } }),
-      prisma.contact.count({ where: { tenantId } }),
-      prisma.contact.count({ where: { tenantId, createdAt: { gte: from, lte: to } } }),
-      prisma.conversation.groupBy({ by: ['status'], where: { tenantId }, _count: { _all: true } }),
-      prisma.conversation.groupBy({ by: ['pipelineStage'], where: { tenantId }, _count: { _all: true } }),
+      prisma.conversation.count({ where: { tenantId, ...convW, createdAt: { gte: from, lte: to } } }),
+      prisma.conversation.count({ where: { tenantId, ...convW, status: 'open' } }),
+      prisma.conversation.count({ where: { tenantId, ...convW, status: 'pending' } }),
+      prisma.message.count({ where: { tenantId, ...msgW, direction: 'inbound', createdAt: { gte: from, lte: to } } }),
+      prisma.message.count({ where: { tenantId, ...msgW, direction: 'outbound', createdAt: { gte: from, lte: to } } }),
+      prisma.contact.count({ where: { tenantId, ...contactW } }),
+      prisma.contact.count({ where: { tenantId, ...contactW, createdAt: { gte: from, lte: to } } }),
+      prisma.conversation.groupBy({ by: ['status'], where: { tenantId, ...convW }, _count: { _all: true } }),
+      prisma.conversation.groupBy({ by: ['pipelineStage'], where: { tenantId, ...convW }, _count: { _all: true } }),
       prisma.message.groupBy({
         by: ['sentByUserId'],
-        where: { tenantId, direction: 'outbound', source: 'agent', createdAt: { gte: from, lte: to } },
+        where: { tenantId, ...msgW, direction: 'outbound', source: 'agent', createdAt: { gte: from, lte: to } },
         _count: { _all: true },
       }),
       prisma.$queryRaw(Prisma.sql`
         SELECT
-          to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS day,
-          SUM(CASE WHEN direction = 'inbound'  THEN 1 ELSE 0 END)::int AS inbound,
-          SUM(CASE WHEN direction = 'outbound' THEN 1 ELSE 0 END)::int AS outbound
-        FROM messages
-        WHERE tenant_id = ${tenantId} AND created_at >= ${from} AND created_at <= ${to}
+          to_char(date_trunc('day', m.created_at), 'YYYY-MM-DD') AS day,
+          SUM(CASE WHEN m.direction = 'inbound'  THEN 1 ELSE 0 END)::int AS inbound,
+          SUM(CASE WHEN m.direction = 'outbound' THEN 1 ELSE 0 END)::int AS outbound
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.tenant_id = ${tenantId} AND m.created_at >= ${from} AND m.created_at <= ${to} ${idFilter}
         GROUP BY 1 ORDER BY 1
       `),
       prisma.$queryRaw(Prisma.sql`
@@ -70,10 +87,11 @@ router.get(
           percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (o.first_out - i.first_in)))::float AS median_seconds,
           COUNT(*)::int AS answered
         FROM (
-          SELECT conversation_id, MIN(created_at) AS first_in
-          FROM messages
-          WHERE tenant_id = ${tenantId} AND direction = 'inbound' AND created_at >= ${from} AND created_at <= ${to}
-          GROUP BY conversation_id
+          SELECT m.conversation_id, MIN(m.created_at) AS first_in
+          FROM messages m
+          JOIN conversations c ON c.id = m.conversation_id
+          WHERE m.tenant_id = ${tenantId} AND m.direction = 'inbound' AND m.created_at >= ${from} AND m.created_at <= ${to} ${idFilter}
+          GROUP BY m.conversation_id
         ) i
         JOIN (
           SELECT conversation_id, MIN(created_at) AS first_out
@@ -85,12 +103,13 @@ router.get(
       `),
       prisma.usageEvent.groupBy({
         by: ['category'],
-        where: { tenantId, kind: 'template_message', occurredAt: { gte: from, lte: to } },
+        where: { tenantId, kind: 'template_message', occurredAt: { gte: from, lte: to }, ...(scope.all ? {} : { conversation: integrationWhere(scope) }) },
         _sum: { quantity: true },
       }),
       prisma.metaIntegration.findMany({
-        where: { tenantId },
-        select: { id: true, displayPhoneNumber: true, verifiedName: true, qualityRating: true, messagingTier: true, active: true, isCoexistence: true },
+        where: { tenantId, ...metaIntegrationWhere(scope) },
+        select: { id: true, displayPhoneNumber: true, verifiedName: true, qualityRating: true, messagingTier: true, active: true, isCoexistence: true, bots: { where: { active: true }, select: { id: true, name: true } } },
+        orderBy: { connectedAt: 'asc' },
       }),
     ]);
 

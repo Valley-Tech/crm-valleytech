@@ -71,5 +71,19 @@ export function AuthProvider({ children }) {
 }
 export const useAuth = () => useContext(AuthContext);
 
-const ROLE_ORDER = { viewer: 0, agent: 1, admin: 2, owner: 3 };
+/* ------------------------------------------------------------------ roles */
+// viewer (Lector) < agent (Agente) < owner (Dueño de chatbot) < admin
+// (Administrador: además gestiona usuarios) < superadmin (dueño del CRM).
+const ROLE_ORDER = { viewer: 0, agent: 1, owner: 2, admin: 3, superadmin: 4 };
+export const ROLE_LABEL = { superadmin: 'SuperAdmin', owner: 'Dueño', admin: 'Administrador', agent: 'Agente', viewer: 'Lector' };
 export const hasRole = (user, minimum) => (ROLE_ORDER[user?.role] ?? -1) >= (ROLE_ORDER[minimum] ?? 99);
+export const isSuperAdmin = (user) => user?.role === 'superadmin';
+export const roleLabel = (role) => ROLE_LABEL[role] ?? role ?? '';
+
+/** Texto corto de lo que administra el usuario: "SamuelitoBot · +57 311 3328433". */
+export function scopeLabel(user) {
+  if (!user || user.scope?.all) return 'Todos los chatbots';
+  const list = user.scope?.integrations ?? [];
+  if (!list.length) return 'Sin chatbot asignado';
+  return list.map((i) => (i.bots?.length ? i.bots.map((b) => b.name).join(', ') : i.verifiedName || i.displayPhoneNumber)).join(' · ');
+}

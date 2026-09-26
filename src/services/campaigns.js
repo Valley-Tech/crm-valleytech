@@ -3,6 +3,7 @@ import logger from '../lib/logger.js';
 import { badRequest, notFound, conflict } from '../lib/errors.js';
 import { campaignQueue } from '../queues/index.js';
 import { publishEvent } from '../realtime/events.js';
+import { contactWhere } from './access.js';
 
 /**
  * Campañas: envío masivo de una plantilla aprobada a un segmento de contactos.
@@ -32,41 +33,49 @@ export function buildComponentsFor(components, contact) {
   }));
 }
 
-/** Construye la lista de destinatarios a partir del filtro elegido. */
-export async function selectContacts({ tenantId, contactIds, tags, all }) {
+/**
+ * Construye la lista de destinatarios a partir del filtro elegido.
+ * Con `scope` (usuario que no es superadmin) solo entran los contactos que
+ * han chateado por alguno de sus números.
+ */
+export async function selectContacts({ tenantId, scope, integrationId, contactIds, tags, all }) {
+  const base = { tenantId, blocked: false, channel: 'whatsapp', ...contactWhere(scope ?? { all: true }) };
   if (Array.isArray(contactIds) && contactIds.length > 0) {
-    return prisma.contact.findMany({
-      where: { tenantId, id: { in: contactIds }, blocked: false, channel: 'whatsapp' },
-    });
+    return prisma.contact.findMany({ where: { ...base, id: { in: contactIds } } });
   }
+  // "Todos" y "por etiqueta" se limitan a los contactos que han chateado por
+  // el número que envía: una campaña de SamuelitoBot no le llega a los clientes de Mishabella.
+  const ofNumber = integrationId ? { conversations: { some: { integrationId } } } : {};
   if (Array.isArray(tags) && tags.length > 0) {
-    return prisma.contact.findMany({
-      where: { tenantId, blocked: false, channel: 'whatsapp', tags: { hasSome: tags } },
-    });
+    return prisma.contact.findMany({ where: { AND: [base, ofNumber, { tags: { hasSome: tags } }] } });
   }
   if (all) {
-    return prisma.contact.findMany({ where: { tenantId, blocked: false, channel: 'whatsapp' } });
+    return prisma.contact.findMany({ where: { AND: [base, ofNumber] } });
   }
   throw badRequest('Indica contactIds, tags o all: true para elegir destinatarios');
 }
 
-export async function createCampaign({ tenantId, userId, input }) {
+export async function createCampaign({ tenantId, userId, scope, input }) {
+  const integration = await prisma.metaIntegration.findFirst({ where: { id: input.integrationId, tenantId, active: true } });
+  if (!integration) throw badRequest('El número que envía no existe o está inactivo');
+
+  // La plantilla tiene que ser de la WABA del número que envía.
   const template = await prisma.template.findFirst({
-    where: { tenantId, name: input.templateName, language: input.templateLanguage ?? 'es' },
+    where: { tenantId, wabaId: integration.wabaId, name: input.templateName, language: input.templateLanguage ?? 'es' },
   });
-  if (!template) throw badRequest('La plantilla no existe en este cliente; sincroniza primero');
+  if (!template) throw badRequest(`La plantilla "${input.templateName}" no existe para el número ${integration.displayPhoneNumber}; sincroniza las plantillas de ese número primero`);
   if (template.status !== 'approved') {
     throw badRequest(`La plantilla "${template.name}" no está aprobada (estado: ${template.status})`);
   }
 
-  const contacts = await selectContacts({ tenantId, ...input.recipients });
+  const contacts = await selectContacts({ tenantId, scope, integrationId: integration.id, ...input.recipients });
   if (contacts.length === 0) throw badRequest('El segmento elegido no tiene contactos');
 
   const campaign = await prisma.$transaction(async (tx) => {
     const created = await tx.campaign.create({
       data: {
         tenantId,
-        integrationId: input.integrationId ?? null,
+        integrationId: integration.id,
         name: input.name,
         templateName: template.name,
         templateLanguage: template.language,
@@ -113,7 +122,7 @@ export async function startCampaign({ tenantId, campaignId }) {
 
   // jobId único por arranque: si se pausa y se reanuda, el job anterior ya terminó.
   await campaignQueue.add('run', { campaignId: campaign.id }, { jobId: `campaign-${campaign.id}-${Date.now()}` });
-  await publishEvent({ tenantId, type: 'campaign:updated', payload: { id: campaign.id, status: 'running' } });
+  await publishEvent({ tenantId, integrationId: campaign.integrationId, type: 'campaign:updated', payload: { id: campaign.id, status: 'running' } });
   return updated;
 }
 
@@ -122,7 +131,7 @@ export async function pauseCampaign({ tenantId, campaignId }) {
   if (!campaign) throw notFound('Campaña no encontrada');
   if (campaign.status !== 'running') throw conflict('campaign_not_running', 'Solo se pausa una campaña en curso');
   const updated = await prisma.campaign.update({ where: { id: campaign.id }, data: { status: 'paused' } });
-  await publishEvent({ tenantId, type: 'campaign:updated', payload: { id: campaign.id, status: 'paused' } });
+  await publishEvent({ tenantId, integrationId: campaign.integrationId, type: 'campaign:updated', payload: { id: campaign.id, status: 'paused' } });
   return updated;
 }
 
@@ -138,7 +147,7 @@ export async function cancelCampaign({ tenantId, campaignId }) {
     });
     return tx.campaign.update({ where: { id: campaign.id }, data: { status: 'cancelled', completedAt: new Date() } });
   });
-  await publishEvent({ tenantId, type: 'campaign:updated', payload: { id: campaign.id, status: 'cancelled' } });
+  await publishEvent({ tenantId, integrationId: campaign.integrationId, type: 'campaign:updated', payload: { id: campaign.id, status: 'cancelled' } });
   return updated;
 }
 

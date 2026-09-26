@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { RouterProvider, useRouter, matchPath } from './router.jsx';
 import { AuthProvider, ToastProvider, useAuth, hasRole } from './store.jsx';
 import { Layout } from './components/Layout.jsx';
@@ -9,47 +9,54 @@ import Contacts from './pages/Contacts.jsx';
 import Campaigns from './pages/Campaigns.jsx';
 import Templates from './pages/Templates.jsx';
 import Dashboard from './pages/Dashboard.jsx';
-import Team from './pages/Team.jsx';
+import Users from './pages/Users.jsx';
 import Bots from './pages/Bots.jsx';
 import BotAI from './pages/BotAI.jsx';
 import Numbers from './pages/Numbers.jsx';
 import Settings from './pages/Settings.jsx';
 
+/**
+ * Quién entra a cada página:
+ *  · viewer/agent/owner/admin ven solo lo de sus números asignados (el
+ *    backend filtra; aquí solo se decide qué menú aparece).
+ *  · Campañas: desde Dueño. Usuarios: Administrador y SuperAdmin.
+ *  · Configuración (Números, Chatbots, Ajustes): solo SuperAdmin.
+ */
 const ROUTES = [
   { pattern: '/inbox', page: Inbox, title: 'Bandeja', role: 'viewer' },
   { pattern: '/inbox/:conversationId', page: Inbox, title: 'Bandeja', role: 'viewer' },
   { pattern: '/contacts', page: Contacts, title: 'Contactos', role: 'viewer' },
   { pattern: '/contacts/:contactId', page: Contacts, title: 'Contactos', role: 'viewer' },
-  { pattern: '/campaigns', page: Campaigns, title: 'Campañas', role: 'admin' },
-  { pattern: '/campaigns/:campaignId', page: Campaigns, title: 'Campañas', role: 'admin' },
+  { pattern: '/campaigns', page: Campaigns, title: 'Campañas', role: 'owner' },
+  { pattern: '/campaigns/:campaignId', page: Campaigns, title: 'Campañas', role: 'owner' },
   { pattern: '/templates', page: Templates, title: 'Plantillas', role: 'viewer' },
   { pattern: '/dashboard', page: Dashboard, title: 'Dashboard', role: 'viewer' },
-  { pattern: '/numbers', page: Numbers, title: 'Números de WhatsApp', role: 'admin' },
-  { pattern: '/bots', page: Bots, title: 'Chatbots conectados', role: 'admin' },
-  { pattern: '/bots/:botId/ai', page: BotAI, title: 'IA y conocimiento', role: 'admin' },
-  { pattern: '/team', page: Team, title: 'Equipo', role: 'admin' },
-  { pattern: '/settings', page: Settings, title: 'Ajustes', role: 'agent' },
+  { pattern: '/users', page: Users, title: 'Usuarios', role: 'admin' },
+  { pattern: '/team', page: Users, title: 'Usuarios', role: 'admin' },
+  { pattern: '/numbers', page: Numbers, title: 'Números de WhatsApp', role: 'superadmin' },
+  { pattern: '/bots', page: Bots, title: 'Chatbots conectados', role: 'superadmin' },
+  { pattern: '/bots/:botId/ai', page: BotAI, title: 'IA y conocimiento', role: 'superadmin' },
+  { pattern: '/settings', page: Settings, title: 'Ajustes', role: 'superadmin' },
 ];
 
 function Routes() {
   const { path, navigate } = useRouter();
   const { user, ready } = useAuth();
 
+  // Redirecciones: a la bandeja desde "/" y desde páginas que el rol no puede ver.
+  const match = ROUTES.map((route) => ({ route, params: matchPath(route.pattern, path) })).find((m) => m.params);
+  const redirect = Boolean(user) && (path === '/' || path === '/login' || (match && !hasRole(user, match.route.role)));
+  useEffect(() => {
+    if (redirect) navigate('/inbox', { replace: true });
+  }, [redirect, navigate]);
+
   if (!ready) return <Loading label="Iniciando…" />;
   if (!user) return <Login />;
-
-  if (path === '/' || path === '/login') {
-    navigate('/inbox', { replace: true });
-    return null;
-  }
+  if (redirect) return null;
 
   for (const route of ROUTES) {
     const params = matchPath(route.pattern, path);
     if (!params) continue;
-    if (!hasRole(user, route.role)) {
-      navigate('/inbox', { replace: true });
-      return null;
-    }
     const Page = route.page;
     return (
       <Layout title={route.title}>

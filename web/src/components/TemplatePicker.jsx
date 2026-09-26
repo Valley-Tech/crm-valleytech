@@ -61,16 +61,17 @@ export function TemplatePreview({ template, values }) {
  * Modal para elegir una plantilla aprobada, llenar sus parámetros y enviarla.
  * onSend recibe { name, language, components }.
  */
-export function TemplatePicker({ onClose, onSend, contact }) {
+export function TemplatePicker({ onClose, onSend, contact, integrationId = null }) {
   const [templates, setTemplates] = useState(null);
   const [selected, setSelected] = useState(null);
   const [values, setValues] = useState({ header: [], body: [], buttons: {} });
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
 
+  // Solo las plantillas del número por el que va este chat (cada chatbot tiene las suyas).
   useEffect(() => {
-    get('/api/templates?status=approved').then((d) => setTemplates(d.items)).catch(() => setTemplates([]));
-  }, []);
+    get(`/api/templates?status=approved${integrationId ? `&integrationId=${integrationId}` : ''}`).then((d) => setTemplates(d.items)).catch(() => setTemplates([]));
+  }, [integrationId]);
 
   const comps = selected?.components ?? [];
   const headerComp = comps.find((c) => c.type === 'HEADER');
@@ -124,7 +125,7 @@ export function TemplatePicker({ onClose, onSend, contact }) {
           <input className="input" placeholder="Buscar por nombre…" value={query} onChange={(e) => setQuery(e.target.value)} />
           {templates === null ? <Loading /> : null}
           {templates !== null && filtered.length === 0 ? (
-            <Empty title="No hay plantillas aprobadas">Sincroniza las plantillas desde la página de Plantillas.</Empty>
+            <Empty title="No hay plantillas aprobadas para este número">Sincroniza las plantillas de este chatbot desde la página de Plantillas.</Empty>
           ) : null}
           <div className="col">
             {filtered.map((t) => (

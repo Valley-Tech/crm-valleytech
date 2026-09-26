@@ -90,8 +90,9 @@ export default function Inbox({ params }) {
     // Datos auxiliares que cambian poco.
     get('/api/quick-replies').then((d) => setQuickReplies(d.items)).catch(() => {});
     loadChannels();
-    if (hasRole(user, 'admin')) {
-      get('/api/users').then((d) => setUsers(d.items.filter((u) => u.active))).catch(() => {});
+    // Dueños, administradores y superadmin pueden asignar chats a su equipo.
+    if (hasRole(user, 'owner')) {
+      get('/api/agents').then((d) => setUsers(d.items)).catch(() => {});
     }
   }, [user, loadChannels]);
 
@@ -627,7 +628,7 @@ function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot,
         </div>
       ) : null}
 
-      {showTemplates ? <TemplatePicker onClose={() => setShowTemplates(false)} onSend={sendTemplate} contact={c.contact} /> : null}
+      {showTemplates ? <TemplatePicker onClose={() => setShowTemplates(false)} onSend={sendTemplate} contact={c.contact} integrationId={c.integration?.id ?? null} /> : null}
     </>
   );
 }
@@ -729,7 +730,8 @@ function ContactPanel({ conversation: c, notes, users, hasBots, mobile = false, 
             <label className="field"><span className="label">Asignada a</span>
               <select className="select" value={c.assignedUser?.id ?? ''} onChange={(e) => onUpdate({ assignedUserId: e.target.value || null })}>
                 <option value="">Sin asignar</option>
-                {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                {/* Solo quienes administran el número de este chat (el superadmin siempre). */}
+                {users.filter((u) => !u.integrationIds || (c.integration && u.integrationIds.includes(c.integration.id)) || u.id === c.assignedUser?.id).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </label>
           ) : null}

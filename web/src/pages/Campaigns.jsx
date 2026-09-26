@@ -3,7 +3,7 @@ import { get, post } from '../api.js';
 import { useRouter } from '../router.jsx';
 import { useToast } from '../store.jsx';
 import { getSocket } from '../socket.js';
-import { Badge, Button, Empty, Field, Loading, Modal, Progress, Tabs, fmtDateTime } from '../components/ui.jsx';
+import { Badge, Button, Empty, Field, Loading, Modal, Progress, Tabs, fmtDateTime, numberLabel } from '../components/ui.jsx';
 import { TemplatePreview, countParams, buildComponents } from '../components/TemplatePicker.jsx';
 import { I } from '../components/Icons.jsx';
 
@@ -15,8 +15,14 @@ export default function Campaigns({ params }) {
   const toast = useToast();
   const [items, setItems] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [numbers, setNumbers] = useState([]);
+  const [numberId, setNumberId] = useState('');
 
-  const load = useCallback(() => get('/api/campaigns').then((d) => setItems(d.items)).catch((e) => toast(e.message, { error: true })), [toast]);
+  useEffect(() => {
+    get('/api/inbox/channels').then((d) => setNumbers(d.items.filter((n) => n.active))).catch(() => {});
+  }, []);
+
+  const load = useCallback(() => get(`/api/campaigns${numberId ? `?integrationId=${numberId}` : ''}`).then((d) => setItems(d.items)).catch((e) => toast(e.message, { error: true })), [toast, numberId]);
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
@@ -32,19 +38,28 @@ export default function Campaigns({ params }) {
   return (
     <>
       <div className="page-head">
-        <p>Una campaña envía una plantilla aprobada a un segmento de contactos. Meta cobra cada plantilla según su categoría; el ritmo lo controla la cola de salida.</p>
-        <Button id="new-campaign" variant="primary" onClick={() => setCreating(true)}><I.plus /> Nueva campaña</Button>
+        <p>Una campaña envía una plantilla aprobada de tu chatbot a un segmento de sus contactos. Meta cobra cada plantilla según su categoría; el ritmo lo controla la cola de salida.</p>
+        <div className="row wrap">
+          {numbers.length > 1 ? (
+            <select id="campaigns-number" className="select" value={numberId} onChange={(e) => setNumberId(e.target.value)} style={{ maxWidth: 320 }}>
+              <option value="">Todos mis chatbots</option>
+              {numbers.map((n) => <option key={n.id} value={n.id}>{numberLabel(n)}</option>)}
+            </select>
+          ) : null}
+          <Button id="new-campaign" variant="primary" onClick={() => setCreating(true)} disabled={numbers.length === 0}><I.plus /> Nueva campaña</Button>
+        </div>
       </div>
       {items === null ? <Loading /> : items.length === 0 ? (
         <div className="card"><Empty title="Sin campañas" icon={<I.campaigns />}>Crea la primera: elige plantilla, segmento y listo.</Empty></div>
       ) : (
         <div className="card table-wrap">
           <table className="table">
-            <thead><tr><th>Campaña</th><th>Plantilla</th><th>Estado</th><th>Progreso</th><th>Creada</th></tr></thead>
+            <thead><tr><th>Campaña</th><th>Chatbot</th><th>Plantilla</th><th>Estado</th><th>Progreso</th><th>Creada</th></tr></thead>
             <tbody>
               {items.map((c) => (
                 <tr key={c.id} className="click" onClick={() => navigate(`/campaigns/${c.id}`)}>
                   <td>{c.name}<div className="tiny faint">{c.totalRecipients} destinatarios</div></td>
+                  <td className="small">{c.integration ? numberLabel(c.integration) : <span className="faint">—</span>}</td>
                   <td className="mono small">{c.templateName}</td>
                   <td><Badge tone={TONE[c.status]}>{LABEL[c.status]}</Badge></td>
                   <td style={{ minWidth: 160 }}>
@@ -63,7 +78,7 @@ export default function Campaigns({ params }) {
           </table>
         </div>
       )}
-      {creating ? <NewCampaign onClose={() => setCreating(false)} onDone={(c) => { setCreating(false); navigate(`/campaigns/${c.id}`); }} /> : null}
+      {creating ? <NewCampaign numbers={numbers} initialNumberId={numberId || (numbers.length === 1 ? numbers[0].id : '')} onClose={() => setCreating(false)} onDone={(c) => { setCreating(false); navigate(`/campaigns/${c.id}`); }} /> : null}
     </>
   );
 }
@@ -111,7 +126,7 @@ function CampaignDetail({ id, onBack }) {
       </div>
 
       <div className="card pad small muted">
-        Plantilla <code>{c.templateName}</code> ({c.templateLanguage}) · {c.scheduledAt ? `programada para ${fmtDateTime(c.scheduledAt)}` : 'sin programar'} · {c.startedAt ? `iniciada ${fmtDateTime(c.startedAt)}` : ''} {c.completedAt ? `· terminada ${fmtDateTime(c.completedAt)}` : ''}
+        {c.integration ? <>Chatbot <strong>{numberLabel(c.integration)}</strong> · </> : null}Plantilla <code>{c.templateName}</code> ({c.templateLanguage}) · {c.scheduledAt ? `programada para ${fmtDateTime(c.scheduledAt)}` : 'sin programar'} · {c.startedAt ? `iniciada ${fmtDateTime(c.startedAt)}` : ''} {c.completedAt ? `· terminada ${fmtDateTime(c.completedAt)}` : ''}
       </div>
 
       <div className="card">
@@ -145,21 +160,23 @@ function CampaignDetail({ id, onBack }) {
 }
 
 /* ========================================================================== */
-function NewCampaign({ onClose, onDone }) {
+function NewCampaign({ numbers, initialNumberId = '', onClose, onDone }) {
   const toast = useToast();
   const [templates, setTemplates] = useState([]);
-  const [numbers, setNumbers] = useState([]);
   const [tags, setTags] = useState([]);
-  const [form, setForm] = useState({ name: '', integrationId: '', templateId: '', segment: 'all', tagList: '', scheduledAt: '' });
+  const [form, setForm] = useState({ name: '', integrationId: initialNumberId, templateId: '', segment: 'all', tagList: '', scheduledAt: '' });
   const [values, setValues] = useState({ header: [], body: [], buttons: {} });
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  // Las plantillas y las etiquetas dependen del número elegido: cada chatbot tiene las suyas.
   useEffect(() => {
-    get('/api/templates?status=approved').then((d) => setTemplates(d.items)).catch(() => {});
-    get('/api/integrations').then((d) => setNumbers(d.items.filter((n) => n.active))).catch(() => {});
-    get('/api/contacts?limit=200').then((d) => setTags(Array.from(new Set(d.items.flatMap((c) => c.tags ?? []))).sort())).catch(() => {});
-  }, []);
+    setTemplates([]);
+    setForm((f) => ({ ...f, templateId: '' }));
+    if (!form.integrationId) return;
+    get(`/api/templates?status=approved&integrationId=${form.integrationId}`).then((d) => setTemplates(d.items)).catch(() => {});
+    get(`/api/contacts?limit=200&integrationId=${form.integrationId}`).then((d) => setTags(Array.from(new Set(d.items.flatMap((c) => c.tags ?? []))).sort())).catch(() => {});
+  }, [form.integrationId]);
 
   const template = templates.find((t) => t.id === form.templateId) ?? null;
   const bodyN = countParams(template?.components?.find((c) => c.type === 'BODY')?.text);
@@ -174,17 +191,18 @@ function NewCampaign({ onClose, onDone }) {
 
   useEffect(() => {
     setPreview(null);
-    post('/api/campaigns/preview', { recipients }).then(setPreview).catch(() => setPreview({ count: 0 }));
-  }, [recipients]);
+    post('/api/campaigns/preview', { recipients, integrationId: form.integrationId || undefined }).then(setPreview).catch(() => setPreview({ count: 0 }));
+  }, [recipients, form.integrationId]);
 
   async function submit(e) {
     e.preventDefault();
+    if (!form.integrationId) return toast('Elige el chatbot (número) que envía', { error: true });
     if (!template) return toast('Elige una plantilla', { error: true });
     setBusy(true);
     try {
       const created = await post('/api/campaigns', {
         name: form.name,
-        integrationId: form.integrationId || undefined,
+        integrationId: form.integrationId,
         templateName: template.name,
         templateLanguage: template.language,
         components: buildComponents(template, values),
@@ -201,18 +219,18 @@ function NewCampaign({ onClose, onDone }) {
   const previewValues = { body: values.body.map((v) => v.replace(/\{\{\s*contact\.name\s*\}\}/g, sampleContact.name)) };
 
   return (
-    <Modal title="Nueva campaña" onClose={onClose} wide footer={<Button variant="primary" onClick={submit} loading={busy} disabled={!form.name || !template || !preview?.count}>Crear campaña</Button>}>
+    <Modal title="Nueva campaña" onClose={onClose} wide footer={<Button variant="primary" onClick={submit} loading={busy} disabled={!form.name || !form.integrationId || !template || !preview?.count}>Crear campaña</Button>}>
       <div className="grid cols-2">
         <div className="col" style={{ gap: 12 }}>
           <Field label="Nombre interno"><input className="input" value={form.name} onChange={set('name')} placeholder="Promo septiembre" /></Field>
-          <Field label="Número que envía" hint="Si no eliges, se usa el primero activo">
-            <select className="select" value={form.integrationId} onChange={set('integrationId')}>
-              <option value="">Automático</option>
-              {numbers.map((n) => <option key={n.id} value={n.id}>{n.displayPhoneNumber} · {n.verifiedName ?? ''}</option>)}
+          <Field label="Chatbot que envía" hint="Las plantillas y los contactos son los de ese número">
+            <select id="campaign-number" className="select" value={form.integrationId} onChange={set('integrationId')} disabled={numbers.length === 1}>
+              <option value="">Elige…</option>
+              {numbers.map((n) => <option key={n.id} value={n.id}>{numberLabel(n)}</option>)}
             </select>
           </Field>
-          <Field label="Plantilla aprobada">
-            <select className="select" value={form.templateId} onChange={set('templateId')}>
+          <Field label="Plantilla aprobada" hint={form.integrationId && templates.length === 0 ? 'Este número no tiene plantillas aprobadas sincronizadas' : undefined}>
+            <select className="select" value={form.templateId} onChange={set('templateId')} disabled={!form.integrationId}>
               <option value="">Elige…</option>
               {templates.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.language} · {t.category}</option>)}
             </select>
@@ -223,7 +241,7 @@ function NewCampaign({ onClose, onDone }) {
             </Field>
           ))}
           <Field label="Segmento">
-            <Tabs value={form.segment} onChange={(v) => setForm((f) => ({ ...f, segment: v }))} items={[{ value: 'all', label: 'Todos los contactos' }, { value: 'tags', label: 'Por etiqueta' }]} />
+            <Tabs value={form.segment} onChange={(v) => setForm((f) => ({ ...f, segment: v }))} items={[{ value: 'all', label: 'Todos mis contactos' }, { value: 'tags', label: 'Por etiqueta' }]} />
           </Field>
           {form.segment === 'tags' ? (
             <Field label="Etiquetas" hint={tags.length ? `Disponibles: ${tags.join(', ')}` : 'Separadas por coma'}>

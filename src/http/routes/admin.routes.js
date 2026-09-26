@@ -6,7 +6,6 @@ import logger from '../../lib/logger.js';
 import { asyncHandler } from '../../lib/http.js';
 import { badRequest, notFound, conflict } from '../../lib/errors.js';
 import { encryptSecret, decryptSecret, generateApiKey } from '../../lib/crypto.js';
-import { hashPassword } from '../../lib/password.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { recordAudit } from '../../services/audit.js';
 import { usageSummary } from '../../services/usage.js';
@@ -26,7 +25,9 @@ import env from '../../config/env.js';
 import { deleteStore } from '../../ai/gemini.js';
 
 const router = Router();
-router.use(requireAuth, requireRole('admin'));
+// Configuración del CRM (números, chatbots, consumo): solo el SuperAdmin.
+// Los usuarios viven en users.routes.js (admin y superadmin).
+router.use(requireAuth, requireRole('superadmin'));
 
 // ===========================================================================
 //  Integraciones de Meta
@@ -647,89 +648,6 @@ router.delete(
       deleteStore(bot.fileSearchStore).catch((err) => logger.warn({ store: bot.fileSearchStore, err: err.message }, 'No se pudo borrar el almacén de Gemini'));
     }
     res.status(204).send();
-  })
-);
-
-// ===========================================================================
-//  Usuarios del cliente
-// ===========================================================================
-
-router.get(
-  '/users',
-  asyncHandler(async (req, res) => {
-    const items = await prisma.user.findMany({
-      where: { tenantId: req.auth.tenantId },
-      select: { id: true, name: true, email: true, role: true, active: true, lastLoginAt: true },
-      orderBy: { createdAt: 'asc' },
-    });
-    res.json({ items });
-  })
-);
-
-router.post(
-  '/users',
-  asyncHandler(async (req, res) => {
-    const input = z
-      .object({
-        name: z.string().min(2).max(80),
-        email: z.string().email(),
-        password: z.string().min(10, 'La contraseña debe tener al menos 10 caracteres'),
-        role: z.enum(['owner', 'admin', 'agent', 'viewer']).default('agent'),
-      })
-      .parse(req.body);
-
-    const user = await prisma.user.create({
-      data: {
-        tenantId: req.auth.tenantId,
-        name: input.name,
-        email: input.email.toLowerCase(),
-        passwordHash: await hashPassword(input.password),
-        role: input.role,
-      },
-      select: { id: true, name: true, email: true, role: true, active: true },
-    });
-
-    res.status(201).json(user);
-  })
-);
-
-router.patch(
-  '/users/:id',
-  asyncHandler(async (req, res) => {
-    const input = z
-      .object({
-        name: z.string().min(2).max(80).optional(),
-        role: z.enum(['owner', 'admin', 'agent', 'viewer']).optional(),
-        active: z.boolean().optional(),
-        password: z.string().min(10).optional(),
-      })
-      .parse(req.body);
-
-    const user = await prisma.user.findFirst({ where: { id: req.params.id, tenantId: req.auth.tenantId } });
-    if (!user) throw notFound('Usuario no encontrado');
-
-    // Nadie se quita a sí mismo el acceso ni el rol de dueño por accidente.
-    if (user.id === req.auth.userId && (input.active === false || (input.role && input.role !== user.role))) {
-      throw badRequest('No puedes cambiar tu propio rol ni desactivarte');
-    }
-
-    const { password, ...rest } = input;
-    const updated = await prisma.user.update({
-      where: { id: user.id },
-      data: { ...rest, ...(password ? { passwordHash: await hashPassword(password) } : {}) },
-      select: { id: true, name: true, email: true, role: true, active: true, lastLoginAt: true },
-    });
-
-    await recordAudit({
-      tenantId: req.auth.tenantId,
-      actorUserId: req.auth.userId,
-      action: 'user.update',
-      entity: 'user',
-      entityId: user.id,
-      metadata: rest,
-    });
-
-    res.json(updated);
   })
 );
 
