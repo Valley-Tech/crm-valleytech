@@ -444,3 +444,20 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 /* Audio que no carga */
 .audio-failed { display: flex; flex-direction: column; gap: 6px; font-size: 0.8rem; color: var(--crit); background: var(--crit-soft); padding: 8px 10px; border-radius: 8px; max-width: 320px; }
 .audio-failed .btn { font-size: 0.75rem; }
+
+/* ---------------------------------------------------------------------- */
+/* IA y conocimiento (v2.7)                                                */
+/* ---------------------------------------------------------------------- */
+.kb-section { margin-top: 12px; }
+.kb-check { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--rule-strong); display: inline-flex; align-items: center; justify-content: center; flex: none; margin-top: 2px; color: var(--accent-ink); }
+.kb-check.on { background: var(--accent); border-color: var(--accent); }
+.kb-check svg { width: 16px; height: 16px; }
+.kb-list { display: flex; flex-direction: column; gap: 8px; }
+.kb-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--sunk); }
+.kb-drop { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 18px; border: 2px dashed var(--rule-strong); border-radius: 8px; background: var(--sunk); }
+.kb-drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.progress-bar { width: 220px; max-width: 100%; height: 8px; border-radius: 4px; background: var(--rule); overflow: hidden; }
+.progress-bar span { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.kb-play { display: flex; flex-direction: column; gap: 10px; }
+.kb-play-box { display: flex; flex-direction: column; gap: 8px; min-height: 160px; max-height: 420px; overflow: auto; padding: 12px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); }
+@media (max-width: 860px) { .kb-item { flex-direction: column; } .progress-bar { width: 100%; } }

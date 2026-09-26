@@ -10,6 +10,8 @@ import { recordUsage } from '../../services/usage.js';
 import { publishEvent } from '../../realtime/events.js';
 import { inboundQueue } from '../../queues/index.js';
 import logger from '../../lib/logger.js';
+import { answer, conversationHistory, historyFromMessages } from '../../ai/knowledge.js';
+import env from '../../config/env.js';
 import {
   findOrCreateConversation,
   pauseBot,
@@ -316,6 +318,72 @@ router.get(
       windowExpiresAt: windowExpiresAt(conversation),
       contact: { id: conversation.contact.id, waId: conversation.contact.waId, name: conversation.contact.name },
     });
+  })
+);
+
+// ---------------------------------------------------------------------------
+//  IA del bot (Gemini + base de conocimiento administrada desde el CRM)
+// ---------------------------------------------------------------------------
+
+/** Qué tiene configurado la IA de este bot (para que el bot decida si la usa). */
+router.get(
+  '/ai/config',
+  asyncHandler(async (req, res) => {
+    const bot = await prisma.botIntegration.findUnique({ where: { id: req.bot.id } });
+    const sources = await prisma.knowledgeSource.groupBy({ by: ['kind', 'status'], where: { botId: bot.id }, _count: { _all: true } });
+    res.json({
+      aiEnabled: bot.aiEnabled && Boolean(env.GEMINI_API_KEY),
+      model: bot.aiModel || env.GEMINI_MODEL,
+      maxChars: bot.aiMaxChars,
+      hasKnowledge: sources.some((s) => s.status === 'ready'),
+      sources: sources.map((s) => ({ kind: s.kind, status: s.status, count: s._count._all })),
+    });
+  })
+);
+
+/**
+ * Respuesta de la IA para un mensaje. El bot manda el texto del cliente y el
+ * CRM responde con el texto ya listo para WhatsApp, usando las instrucciones,
+ * las preguntas frecuentes y los documentos del bot, y el historial reciente
+ * de la conversación guardado en el CRM. El bot decide cómo enviarlo.
+ */
+router.post(
+  '/ai/reply',
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({
+        conversationId: z.string().uuid().optional(),
+        to: z.string().min(6).optional(),
+        text: z.string().trim().min(1).max(4000),
+        history: z.array(z.object({ role: z.enum(['user', 'model']), text: z.string().max(4000) })).max(40).optional(),
+        historyLimit: z.number().int().min(0).max(40).default(20),
+      })
+      .parse(req.body);
+
+    const bot = await prisma.botIntegration.findUnique({ where: { id: req.bot.id } });
+    if (!bot.aiEnabled) throw conflict('ai_disabled', 'La IA de este chatbot está desactivada en el CRM (Chatbots → IA y conocimiento).');
+    if (!env.GEMINI_API_KEY) throw conflict('ai_not_configured', 'El CRM no tiene GEMINI_API_KEY configurada.');
+
+    let history = [];
+    if (input.history) {
+      history = historyFromMessages(input.history.map((h) => ({ direction: h.role === 'user' ? 'inbound' : 'outbound', text: h.text })), input.historyLimit);
+    } else {
+      let conversationId = input.conversationId ?? null;
+      if (!conversationId && input.to) {
+        const contact = await prisma.contact.findUnique({ where: { tenantId_channel_waId: { tenantId: req.bot.tenantId, channel: req.bot.channel, waId: input.to } } });
+        const conversation = contact
+          ? await prisma.conversation.findFirst({ where: { tenantId: req.bot.tenantId, contactId: contact.id }, orderBy: { lastMessageAt: 'desc' } })
+          : null;
+        conversationId = conversation?.id ?? null;
+      }
+      if (conversationId && input.historyLimit > 0) history = await conversationHistory(conversationId, input.historyLimit);
+      // El mensaje actual normalmente ya está en el historial (llegó por webhook): no duplicarlo.
+      const last = history[history.length - 1];
+      if (last?.role === 'user' && last.parts[0].text.trim() === input.text.trim()) history.pop();
+    }
+
+    const result = await answer({ bot, text: input.text, history });
+    res.json(result);
   })
 );
 

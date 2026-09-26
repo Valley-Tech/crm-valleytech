@@ -53,6 +53,10 @@ const schema = z.object({
   // Convertir notas de voz (ogg/opus) a mp3 si hay ffmpeg. "false" para desactivar.
   MEDIA_TRANSCODE_AUDIO: z.preprocess((v) => (v === undefined || v === '' ? true : String(v) !== 'false'), z.boolean()).default(true),
 
+  // IA de los chatbots (Gemini). Sin clave, la sección "IA y conocimiento" avisa y no funciona.
+  GEMINI_API_KEY: z.string().optional().default(''),
+  GEMINI_MODEL: z.string().optional().default('gemini-3.8-flash'),
+
   BOT_PAUSE_MINUTES: z.coerce.number().int().positive().default(30),
   OUTBOUND_RATE_PER_SECOND: z.coerce.number().int().positive().default(20),
 });

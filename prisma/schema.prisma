@@ -113,6 +113,7 @@ model Tenant {
   users            User[]
   integrations     MetaIntegration[]
   botIntegrations  BotIntegration[]
+  knowledgeSources KnowledgeSource[]
   contacts         Contact[]
   conversations    Conversation[]
   messages         Message[]
@@ -214,14 +215,57 @@ model BotIntegration {
   apiKeyPrefix   String   @map("api_key_prefix")
   active         Boolean  @default(true)
   lastDispatchAt DateTime? @map("last_dispatch_at")
+  // --- IA (Gemini) y base de conocimiento ---------------------------------
+  aiEnabled       Boolean  @default(false) @map("ai_enabled")
+  aiModel         String?  @map("ai_model")
+  aiInstructions  String?  @map("ai_instructions")   // quién es el bot, tono, reglas
+  aiTemperature   Float    @default(0.4) @map("ai_temperature")
+  aiMaxChars      Int      @default(600) @map("ai_max_chars")
+  // Almacén de File Search de Gemini (fileSearchStores/...) con los documentos del bot.
+  fileSearchStore String?  @map("file_search_store")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   metaIntegration MetaIntegration? @relation(fields: [metaIntegrationId], references: [id], onDelete: SetNull)
+  knowledge       KnowledgeSource[]
 
   @@index([tenantId, channel, active])
   @@map("bot_integrations")
+}
+
+// ---------------------------------------------------------------------------
+// KnowledgeSource: lo que la IA de un chatbot "sabe": archivos (pdf, docx,
+// xlsx, imágenes…), páginas web rastreadas, preguntas frecuentes y textos.
+// El contenido indexado vive en Gemini File Search; aquí queda el registro,
+// el estado y (para FAQ/texto) el contenido original.
+// ---------------------------------------------------------------------------
+model KnowledgeSource {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  botId        String   @map("bot_id")
+  kind         String   // file | url | site | faq | text
+  name         String
+  status       String   @default("pending") // pending | processing | ready | error
+  error        String?
+  mimeType     String?  @map("mime_type")
+  sizeBytes    Int?     @map("size_bytes")
+  storageKey   String?  @map("storage_key")   // copia del archivo original
+  sourceUrl    String?  @map("source_url")
+  content      String?                        // faq: pregunta\n---\nrespuesta · text: el texto
+  documentName String?  @map("document_name") // fileSearchStores/.../documents/...
+  documents    Json?                          // varios documentos (sitios web)
+  pages        Int      @default(0)
+  indexedAt    DateTime? @map("indexed_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bot    BotIntegration @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId, kind])
+  @@index([tenantId])
+  @@map("knowledge_sources")
 }
 
 // ---------------------------------------------------------------------------

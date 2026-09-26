@@ -11,6 +11,7 @@ import Templates from './pages/Templates.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Team from './pages/Team.jsx';
 import Bots from './pages/Bots.jsx';
+import BotAI from './pages/BotAI.jsx';
 import Numbers from './pages/Numbers.jsx';
 import Settings from './pages/Settings.jsx';
 
@@ -25,6 +26,7 @@ const ROUTES = [
   { pattern: '/dashboard', page: Dashboard, title: 'Dashboard', role: 'viewer' },
   { pattern: '/numbers', page: Numbers, title: 'Números de WhatsApp', role: 'admin' },
   { pattern: '/bots', page: Bots, title: 'Chatbots conectados', role: 'admin' },
+  { pattern: '/bots/:botId/ai', page: BotAI, title: 'IA y conocimiento', role: 'admin' },
   { pattern: '/team', page: Team, title: 'Equipo', role: 'admin' },
   { pattern: '/settings', page: Settings, title: 'Ajustes', role: 'agent' },
 ];

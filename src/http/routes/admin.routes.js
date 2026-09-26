@@ -23,6 +23,7 @@ import { diagnoseIntegration } from '../../services/integrationDiagnostics.js';
 import { webhookDiagnostics, listPartnersAdded, clearPartnerAdded } from '../../services/webhookDiagnostics.js';
 import { invalidateWebhookSecrets } from '../../services/webhookSecrets.js';
 import env from '../../config/env.js';
+import { deleteStore } from '../../ai/gemini.js';
 
 const router = Router();
 router.use(requireAuth, requireRole('admin'));
@@ -510,6 +511,7 @@ function serializeBot(bot) {
     apiKeyPrefix: bot.apiKeyPrefix,
     active: bot.active,
     lastDispatchAt: bot.lastDispatchAt,
+    aiEnabled: bot.aiEnabled ?? false,
     createdAt: bot.createdAt,
   };
 }
@@ -640,6 +642,10 @@ router.delete(
     if (!bot) throw notFound('Bot no encontrado');
 
     await prisma.botIntegration.delete({ where: { id: bot.id } });
+    // Su almacén de conocimiento en Gemini ya no sirve para nada: se borra (mejor esfuerzo).
+    if (bot.fileSearchStore) {
+      deleteStore(bot.fileSearchStore).catch((err) => logger.warn({ store: bot.fileSearchStore, err: err.message }, 'No se pudo borrar el almacén de Gemini'));
+    }
     res.status(204).send();
   })
 );

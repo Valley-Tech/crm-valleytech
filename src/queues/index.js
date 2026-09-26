@@ -7,6 +7,7 @@ export const QUEUE = {
   media: 'crm.media',
   botDispatch: 'crm.bot-dispatch',
   campaign: 'crm.campaign',
+  knowledge: 'crm.knowledge',
 };
 
 const defaultJobOptions = {
@@ -30,7 +31,13 @@ export const campaignQueue = new Queue(QUEUE.campaign, {
   defaultJobOptions: { ...defaultJobOptions, attempts: 3 },
 });
 
-export const allQueues = [inboundQueue, outboundQueue, mediaQueue, botDispatchQueue, campaignQueue];
+// Indexación de conocimiento (archivos, sitios web) en Gemini: lenta, pocos reintentos.
+export const knowledgeQueue = new Queue(QUEUE.knowledge, {
+  connection: redis,
+  defaultJobOptions: { ...defaultJobOptions, attempts: 2, backoff: { type: 'fixed', delay: 15000 } },
+});
+
+export const allQueues = [inboundQueue, outboundQueue, mediaQueue, botDispatchQueue, campaignQueue, knowledgeQueue];
 
 export async function closeQueues() {
   await Promise.all(allQueues.map((queue) => queue.close()));

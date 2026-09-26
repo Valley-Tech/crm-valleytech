@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { get, post, patch, del } from '../api.js';
 import { useAuth, useToast } from '../store.jsx';
+import { useRouter } from '../router.jsx';
 import { Badge, Button, Empty, Field, Loading, Modal, Switch, fmtDateTime } from '../components/ui.jsx';
 import { I } from '../components/Icons.jsx';
 
 export default function Bots() {
   const { config } = useAuth();
+  const { navigate } = useRouter();
   const toast = useToast();
   const [items, setItems] = useState(null);
   const [numbers, setNumbers] = useState([]);
@@ -49,7 +51,7 @@ export default function Bots() {
       ) : (
         <div className="card table-wrap">
           <table className="table">
-            <thead><tr><th>Nombre</th><th>Endpoint</th><th>Atiende</th><th>API key</th><th>Último despacho</th><th>Activo</th><th></th></tr></thead>
+            <thead><tr><th>Nombre</th><th>Endpoint</th><th>Atiende</th><th>IA</th><th>API key</th><th>Último despacho</th><th>Activo</th><th></th></tr></thead>
             <tbody>
               {items.map((b) => (
                 <tr key={b.id}>
@@ -61,6 +63,7 @@ export default function Bots() {
                       {numbers.map((n) => <option key={n.id} value={n.id}>{n.displayPhoneNumber || n.phoneNumberId} · {n.verifiedName || ''}</option>)}
                     </select>
                   </td>
+                  <td><Button size="sm" onClick={() => navigate(`/bots/${b.id}/ai`)} title="Instrucciones, preguntas frecuentes, archivos y sitios web">{b.aiEnabled ? <Badge tone="ok">activa</Badge> : <Badge>apagada</Badge>} Conocimiento</Button></td>
                   <td className="mono small">{b.apiKeyPrefix}…</td>
                   <td className="small">{fmtDateTime(b.lastDispatchAt)}</td>
                   <td><Switch on={b.active} onChange={(v) => toggle(b, v)} /></td>

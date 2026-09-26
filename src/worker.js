@@ -9,6 +9,7 @@ import processOutboundMessage from './queues/processors/outboundMessage.js';
 import processMediaDownload from './queues/processors/mediaDownload.js';
 import processBotDispatch from './queues/processors/botDispatch.js';
 import processCampaignSend from './queues/processors/campaignSend.js';
+import processKnowledgeIndex from './queues/processors/knowledgeIndex.js';
 
 /**
  * Proceso worker, separado del web a propósito.
@@ -29,6 +30,8 @@ const workers = [
   new Worker(QUEUE.botDispatch, processBotDispatch, { connection: redis, concurrency: 10 }),
   // Una campaña a la vez por worker: el ritmo real lo marca la cola de salida.
   new Worker(QUEUE.campaign, processCampaignSend, { connection: redis, concurrency: 1 }),
+  // Indexar en Gemini puede tardar minutos (rastreo de sitios): de dos en dos.
+  new Worker(QUEUE.knowledge, processKnowledgeIndex, { connection: redis, concurrency: 2, lockDuration: 15 * 60 * 1000 }),
 ];
 
 for (const worker of workers) {
