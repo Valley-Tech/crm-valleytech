@@ -434,6 +434,28 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .chan { color: hsl(var(--h) 60% 80%); background: hsl(var(--h) 40% 18%); border-color: hsl(var(--h) 40% 30%); }
 }
+
+/* ---------------------------------------------------------------------- */
+/* Etiquetas de contacto (como en la app de WhatsApp Business) — v2.8.1     */
+/* ---------------------------------------------------------------------- */
+.ctag {
+  --h: 30;
+  display: inline-flex; align-items: center; gap: 4px; max-width: 140px;
+  font-size: 0.64rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; line-height: 1.2;
+  padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+  color: hsl(var(--h) 55% 30%); background: hsl(var(--h) 80% 90%); border: 1px solid hsl(var(--h) 55% 78%);
+}
+.ctag button { border: none; background: none; color: inherit; cursor: pointer; padding: 0 0 0 2px; font-size: 0.9rem; line-height: 1; opacity: 0.7; }
+.ctag button:hover { opacity: 1; }
+.ctag.more { color: var(--ink-soft); background: var(--sunk); border-color: var(--rule); }
+.thread-head .ctag { flex: none; }
+@media (max-width: 1180px) { .thread-head .ctag { display: none; } } /* en pantallas estrechas las etiquetas quedan en la lista y el panel */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .ctag { color: hsl(var(--h) 70% 82%); background: hsl(var(--h) 45% 20%); border-color: hsl(var(--h) 45% 32%); }
+  :root:not([data-theme="light"]) .ctag.more { color: var(--ink-soft); background: var(--sunk); border-color: var(--rule); }
+}
+:root[data-theme="dark"] .ctag { color: hsl(var(--h) 70% 82%); background: hsl(var(--h) 45% 20%); border-color: hsl(var(--h) 45% 32%); }
+:root[data-theme="dark"] .ctag.more { color: var(--ink-soft); background: var(--sunk); border-color: var(--rule); }
 :root[data-theme="dark"] .chan { color: hsl(var(--h) 60% 80%); background: hsl(var(--h) 40% 18%); border-color: hsl(var(--h) 40% 30%); }
 
 /* Filtro por número en la bandeja */

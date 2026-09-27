@@ -3,7 +3,7 @@ import { get, post, patch, del, api } from '../api.js';
 import { getSocket } from '../socket.js';
 import { useRouter } from '../router.jsx';
 import { useAuth, useToast, hasRole } from '../store.jsx';
-import { Avatar, Badge, Button, Chips, Empty, Loading, Switch, Menu, Confirm, ChannelTag, useMediaQuery, MOBILE_QUERY, fmtTime, fmtDateTime, fmtPhone, CONV_STATUS, STAGES } from '../components/ui.jsx';
+import { Avatar, Badge, Button, Chips, Empty, Loading, Switch, Menu, Confirm, ChannelTag, useMediaQuery, MOBILE_QUERY, fmtTime, fmtDateTime, fmtPhone, CONV_STATUS, STAGES, Tag, TagList } from '../components/ui.jsx';
 import { MessageBubble } from '../components/MessageBubble.jsx';
 import { TemplatePicker } from '../components/TemplatePicker.jsx';
 import { I } from '../components/Icons.jsx';
@@ -406,6 +406,7 @@ function ConversationRow({ conversation: c, active, selectMode, selected, canWri
         </div>
         <div className="meta">
           <ChannelTag bot={c.bot} integration={c.integration} />
+          <TagList tags={c.contact?.tags ?? []} max={2} />
           {c.status !== 'open' ? <span className={`badge ${c.status === 'pending' ? 'warn' : ''}`}>{CONV_STATUS[c.status]}</span> : null}
           {c.assignedUser ? <span className="badge">{c.assignedUser.name.split(' ')[0]}</span> : null}
           {c.botActive ? <span className="badge accent" title={c.bot ? `${c.bot.name} responde en este chat` : 'bot activo'}>{c.botActive && c.bot ? 'bot activo' : 'bot'}</span> : c.botPausedUntil ? <span className="badge warn">bot en pausa</span> : null}
@@ -536,6 +537,7 @@ function Thread({ conversation: c, messages, onBack, onTogglePanel, onToggleBot,
             <div className="truncate" style={{ fontWeight: 600 }}>{title}</div>
             <div className="tiny faint row" style={{ gap: 6, flexWrap: 'nowrap' }}>
               <ChannelTag bot={c.bot} integration={c.integration} />
+              {!isMobile ? <TagList tags={c.contact?.tags ?? []} max={3} /> : null}
               <span className="truncate">
                 {isMobile ? (c.botActive ? 'bot activo' : c.botPausedUntil ? 'bot en pausa' : CONV_STATUS[c.status]) : `${fmtPhone(c.contact?.waId)} · ${CONV_STATUS[c.status]} · ${c.pipelineStage}`}
                 {isMobile ? ' · toca para ver info' : ''}
@@ -702,7 +704,7 @@ function ContactPanel({ conversation: c, notes, users, hasBots, mobile = false, 
           <h4>Etiquetas</h4>
           <div className="chips">
             {(c.contact?.tags ?? []).map((t) => (
-              <span key={t} className="tag">{t}{canWrite ? <button onClick={() => removeTag(t)} aria-label={`Quitar ${t}`}>×</button> : null}</span>
+              <Tag key={t} name={t} onRemove={canWrite ? removeTag : undefined} />
             ))}
             {(c.contact?.tags ?? []).length === 0 ? <span className="small faint">Sin etiquetas</span> : null}
           </div>

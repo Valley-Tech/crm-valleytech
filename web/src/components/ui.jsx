@@ -246,6 +246,34 @@ export function channelLabel({ bot, integration } = {}) {
 /** "SamuelitoBot · +57 311 3328433" para un número de WhatsApp (con su chatbot). */
 export const numberLabel = (n) => `${n?.bots?.length ? n.bots.map((b) => b.name).join(', ') : n?.verifiedName || 'Sin chatbot'} · ${n?.displayPhoneNumber ?? ''}`;
 
+/**
+ * Etiqueta de contacto al estilo de la app de WhatsApp Business: mayúsculas,
+ * color fijo por nombre (la misma etiqueta siempre se ve igual en todo el CRM).
+ * `onRemove` añade la × para quitarla.
+ */
+export function Tag({ name, onRemove, className = '' }) {
+  const hue = hueOf(String(name).toLowerCase());
+  return (
+    <span className={`ctag ${className}`} style={{ '--h': hue }} title={name}>
+      <span className="truncate">{name}</span>
+      {onRemove ? <button type="button" onClick={(e) => { e.stopPropagation(); onRemove(name); }} aria-label={`Quitar ${name}`}>×</button> : null}
+    </span>
+  );
+}
+
+/** Hasta `max` etiquetas y un "+N" con el resto (para listas). */
+export function TagList({ tags = [], max = 3, className = '' }) {
+  if (!tags.length) return null;
+  const shown = tags.slice(0, max);
+  const rest = tags.length - shown.length;
+  return (
+    <>
+      {shown.map((t) => <Tag key={t} name={t} className={className} />)}
+      {rest > 0 ? <span className="ctag more" title={tags.slice(max).join(', ')}>+{rest}</span> : null}
+    </>
+  );
+}
+
 export function ChannelTag({ bot, integration, full = false, className = '' }) {
   if (!integration && !bot) {
     return <span className={`chan none ${className}`} title="Este chat no tiene número de WhatsApp asignado">sin número</span>;

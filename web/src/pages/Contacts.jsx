@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { get, patch, del, post } from '../api.js';
 import { useRouter } from '../router.jsx';
 import { useAuth, useToast, hasRole } from '../store.jsx';
-import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Menu, Confirm, ChannelTag, fmtDateTime, fmtPhone, CONV_STATUS, numberLabel } from '../components/ui.jsx';
+import { Avatar, Badge, Button, Empty, Field, Loading, Modal, Menu, Confirm, ChannelTag, fmtDateTime, fmtPhone, CONV_STATUS, numberLabel, Tag } from '../components/ui.jsx';
 import { I } from '../components/Icons.jsx';
 
 /**
@@ -133,7 +133,7 @@ export default function Contacts({ params }) {
                   </td>
                   <td className="mono">{fmtPhone(c.waId)}</td>
                   <td>{c.integration || c.bot ? <ChannelTag bot={c.bot} integration={c.integration} /> : <span className="faint small">—</span>}</td>
-                  <td><span className="chips">{(c.tags ?? []).map((t) => <span key={t} className="tag">{t}</span>)}</span></td>
+                  <td><span className="chips">{(c.tags ?? []).map((t) => <Tag key={t} name={t} />)}</span></td>
                   <td>{c.email ?? '—'}</td>
                   <td className="small">{fmtDateTime(c.updatedAt)}</td>
                   {canWrite && !selectMode ? (
