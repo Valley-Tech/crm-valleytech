@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { get, post } from '../api.js';
+import { get, post, del } from '../api.js';
 import { useAuth, useToast, hasRole } from '../store.jsx';
-import { Badge, Button, Empty, Loading, Tabs, fmtDateTime, numberLabel } from '../components/ui.jsx';
+import { Badge, Button, Confirm, Empty, Loading, Tabs, fmtDateTime, numberLabel } from '../components/ui.jsx';
 import { TemplatePreview } from '../components/TemplatePicker.jsx';
+import { TemplateBuilder } from '../components/TemplateBuilder.jsx';
 import { I } from '../components/Icons.jsx';
 
 const TONE = { approved: 'ok', pending: 'warn', rejected: 'crit', paused: 'warn', disabled: '' };
@@ -22,6 +23,9 @@ export default function Templates() {
   const [status, setStatus] = useState('approved');
   const [selected, setSelected] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [removing, setRemoving] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     get('/api/inbox/channels').then((d) => {
@@ -54,7 +58,7 @@ export default function Templates() {
   return (
     <>
       <div className="page-head">
-        <p>Las plantillas se crean y aprueban en el WhatsApp Manager de Meta, por cada número. Aquí se sincronizan para poder enviarlas desde la bandeja y en campañas.</p>
+        <p>Crea aquí las plantillas de cada chatbot (Meta las revisa y aprueba, igual que en el WhatsApp Manager) o sincroniza las que ya existen. Las aprobadas se envían desde la bandeja y en campañas.</p>
         <div className="row wrap">
           {numbers.length > 1 ? (
             <select id="templates-number" className="select" value={numberId} onChange={(e) => setNumberId(e.target.value)} style={{ maxWidth: 320 }}>
@@ -62,7 +66,8 @@ export default function Templates() {
               {numbers.map((n) => <option key={n.id} value={n.id}>{numberLabel(n)}</option>)}
             </select>
           ) : current ? <Badge tone="accent">{numberLabel(current)}</Badge> : null}
-          {hasRole(user, 'owner') ? <Button id="sync-templates" variant="primary" onClick={sync} loading={syncing}><I.refresh /> Sincronizar con Meta</Button> : null}
+          {hasRole(user, 'owner') ? <Button id="sync-templates" onClick={sync} loading={syncing}><I.refresh /> Sincronizar con Meta</Button> : null}
+          {hasRole(user, 'owner') ? <Button id="new-template" variant="primary" onClick={() => setCreating(true)} disabled={numbers.length === 0}><I.plus /> Crear plantilla</Button> : null}
         </div>
       </div>
 
@@ -114,13 +119,45 @@ export default function Templates() {
                     <div key={i}><strong>{c.type}</strong>{c.format ? ` · ${c.format}` : ''}{c.text ? `: ${c.text}` : ''}{c.buttons ? `: ${c.buttons.map((b) => b.text).join(' · ')}` : ''}</div>
                   ))}
                 </div>
-                <div className="tiny faint mono">id {selected.metaTemplateId ?? '—'}</div>
+                <div className="row between">
+                  <div className="tiny faint mono">id {selected.metaTemplateId ?? '—'}</div>
+                  {hasRole(user, 'owner') ? <Button size="sm" variant="danger" onClick={() => setRemoving(selected)}><I.trash /> Eliminar</Button> : null}
+                </div>
               </>
             ) : (
               <Empty title="Elige una plantilla">Verás la vista previa tal como la recibe el cliente.</Empty>
             )}
           </div>
         </div>
+      ) : null}
+      {creating ? (
+        <TemplateBuilder
+          numbers={numbers}
+          initialNumberId={numberId}
+          onClose={() => setCreating(false)}
+          onDone={() => { setCreating(false); setStatus('pending'); load(); }}
+        />
+      ) : null}
+      {removing ? (
+        <Confirm
+          title={`¿Eliminar la plantilla ${removing.name}?`}
+          confirmLabel="Eliminar plantilla"
+          danger
+          busy={busy}
+          onConfirm={async () => {
+            setBusy(true);
+            try {
+              await del(`/api/templates/${removing.id}`);
+              toast(`Plantilla ${removing.name} eliminada`);
+              setRemoving(null);
+              if (selected?.id === removing.id) setSelected(null);
+              load();
+            } catch (err) { toast(err.message, { error: true }); } finally { setBusy(false); }
+          }}
+          onClose={() => setRemoving(null)}
+        >
+          Se elimina en Meta y en el CRM. Las campañas que la usen ya no podrán enviarse, y Meta no deja reutilizar el nombre de una plantilla aprobada durante 30 días.
+        </Confirm>
       ) : null}
     </>
   );

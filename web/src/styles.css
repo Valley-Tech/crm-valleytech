@@ -202,6 +202,17 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .chk-list .who small { color: var(--ink-faint); font-family: var(--mono); font-size: 0.75rem; }
 .role-help { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 0.82rem; color: var(--ink-soft); }
 .role-help strong { color: var(--ink); }
+/* Crear plantilla (v2.10) */
+.chk-card { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 8px; cursor: pointer; }
+.chk-card:hover { background: var(--sunk); }
+.chk-card.on { border-color: var(--accent); background: var(--accent-soft); }
+.chk-card input { accent-color: var(--accent); margin-top: 3px; }
+.chk-card span { display: flex; flex-direction: column; gap: 2px; font-size: 0.9rem; }
+.chk-card small { color: var(--ink-soft); font-size: 0.8rem; }
+.tb-phone { background: var(--paper); border: 1px solid var(--rule); border-radius: 14px; padding: 16px 12px; min-height: 200px; }
+.tb-phone .msg { white-space: pre-wrap; }
+.tb-side { position: sticky; top: 0; align-self: flex-start; }
+@media (max-width: 860px) { .tb-side { position: static; } }
 .nav { display: flex; flex-direction: column; gap: 2px; padding: 8px; flex: 1; overflow-y: auto; }
 .nav .section { padding: 12px 10px 4px; }
 .nav a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; color: var(--ink-soft); font-weight: 500; font-size: 0.9rem; }

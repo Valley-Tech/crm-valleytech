@@ -1,11 +1,15 @@
 import { Router } from 'express';
+import multer from 'multer';
+import { z } from 'zod';
 import prisma from '../../lib/prisma.js';
 import { asyncHandler } from '../../lib/http.js';
-import { badRequest, forbidden } from '../../lib/errors.js';
+import { badRequest, forbidden, notFound } from '../../lib/errors.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import { listTemplates } from '../../whatsapp/templates.js';
+import { listTemplates, createTemplate, deleteTemplate, uploadTemplateExample } from '../../whatsapp/templates.js';
 import { metaCredentials } from '../../whatsapp/credentials.js';
 import { templateWhere, metaIntegrationWhere, canSeeIntegration } from '../../services/access.js';
+import { recordAudit } from '../../services/audit.js';
+import { buildTemplateComponents, templateDraftSchema } from '../../services/templateBuilder.js';
 
 /**
  * Plantillas de WhatsApp. Pertenecen a la WABA de cada número, así que cada
@@ -121,6 +125,139 @@ router.post(
     }
 
     res.json({ synced, removed, wabas: seen.size });
+  })
+);
+
+// ---------------------------------------------------------------------------
+//  Crear y eliminar plantillas desde el CRM (como en el WhatsApp Manager)
+// ---------------------------------------------------------------------------
+
+/** Número visible por el usuario, con sus credenciales de Meta. */
+async function integrationInScope(req, integrationId) {
+  if (!canSeeIntegration(req.auth.scope, integrationId)) throw forbidden('Ese número no está entre los que administras');
+  const integration = await prisma.metaIntegration.findFirst({ where: { id: integrationId, tenantId: req.auth.tenantId, active: true } });
+  if (!integration) throw badRequest('Número no encontrado o inactivo');
+  return integration;
+}
+
+const exampleUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 * 1024 * 1024 } });
+const EXAMPLE_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png', 'video/mp4', 'application/pdf']);
+
+/**
+ * Archivo de ejemplo para una cabecera de imagen, video o documento. Meta lo
+ * exige para revisar la plantilla; devuelve el "handle" que va en el borrador.
+ */
+router.post(
+  '/templates/example',
+  requireRole('owner'),
+  exampleUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    const integrationId = String(req.body?.integrationId ?? '');
+    if (!integrationId) throw badRequest('Indica integrationId');
+    if (!req.file) throw badRequest('Adjunta el archivo en el campo "file"');
+    if (!EXAMPLE_MIME.has(req.file.mimetype)) throw badRequest('Formato no admitido: usa JPG, PNG, MP4 o PDF');
+    const integration = await integrationInScope(req, integrationId);
+    const credentials = metaCredentials(integration);
+    const { handle } = await uploadTemplateExample({
+      appId: credentials.appId,
+      accessToken: credentials,
+      buffer: req.file.buffer,
+      mimeType: req.file.mimetype,
+      filename: req.file.originalname,
+    });
+    res.status(201).json({ handle, name: req.file.originalname, mimeType: req.file.mimetype, sizeBytes: req.file.size });
+  })
+);
+
+/** Vista previa del JSON que se mandaría a Meta (para depurar sin crear nada). */
+router.post(
+  '/templates/preview',
+  requireRole('owner'),
+  asyncHandler(async (req, res) => {
+    const draft = templateDraftSchema.parse(req.body);
+    res.json(buildTemplateComponents(draft));
+  })
+);
+
+/** Crea la plantilla en Meta (queda pendiente de revisión) y la guarda localmente. */
+router.post(
+  '/templates',
+  requireRole('owner'),
+  asyncHandler(async (req, res) => {
+    const draft = templateDraftSchema.parse(req.body);
+    const integration = await integrationInScope(req, draft.integrationId);
+    const payload = buildTemplateComponents(draft);
+
+    const exists = await prisma.template.findFirst({
+      where: { tenantId: req.auth.tenantId, wabaId: integration.wabaId, name: payload.name, language: payload.language },
+      select: { id: true },
+    });
+    if (exists) throw badRequest(`Ya existe la plantilla "${payload.name}" en ${payload.language} para este número`);
+
+    const created = await createTemplate(integration.wabaId, metaCredentials(integration), payload);
+    const status = String(created?.status ?? 'PENDING').toLowerCase();
+
+    const template = await prisma.template.upsert({
+      where: { tenantId_wabaId_name_language: { tenantId: req.auth.tenantId, wabaId: integration.wabaId, name: payload.name, language: payload.language } },
+      update: { metaTemplateId: created?.id ?? null, category: created?.category ?? payload.category, status: VALID.has(status) ? status : 'pending', components: payload.components, syncedAt: new Date() },
+      create: {
+        tenantId: req.auth.tenantId,
+        wabaId: integration.wabaId,
+        metaTemplateId: created?.id ?? null,
+        name: payload.name,
+        language: payload.language,
+        category: created?.category ?? payload.category,
+        status: VALID.has(status) ? status : 'pending',
+        components: payload.components,
+      },
+    });
+
+    await recordAudit({
+      tenantId: req.auth.tenantId,
+      actorUserId: req.auth.userId,
+      action: 'template.create',
+      entity: 'template',
+      entityId: template.id,
+      metadata: { name: payload.name, language: payload.language, category: payload.category, integration: integration.displayPhoneNumber },
+    });
+
+    res.status(201).json({
+      ...template,
+      numbers: [{ id: integration.id, displayPhoneNumber: integration.displayPhoneNumber, verifiedName: integration.verifiedName, active: integration.active }],
+      metaCategory: created?.category ?? null,
+    });
+  })
+);
+
+/** Elimina la plantilla en Meta y en el CRM (solo esa variante de idioma). */
+router.delete(
+  '/templates/:id',
+  requireRole('owner'),
+  asyncHandler(async (req, res) => {
+    const template = await prisma.template.findFirst({ where: { id: req.params.id, tenantId: req.auth.tenantId, ...templateWhere(req.auth.scope) } });
+    if (!template) throw notFound('Plantilla no encontrada');
+    const integration = await prisma.metaIntegration.findFirst({
+      where: { tenantId: req.auth.tenantId, wabaId: template.wabaId, active: true, ...metaIntegrationWhere(req.auth.scope) },
+      orderBy: { connectedAt: 'asc' },
+    });
+    if (!integration) throw badRequest('No hay un número activo de esa cuenta para pedirle a Meta que la elimine');
+
+    await deleteTemplate(integration.wabaId, metaCredentials(integration), { name: template.name, id: template.metaTemplateId ?? undefined });
+    // Sin id de Meta, el borrado por nombre se lleva todos los idiomas: se reflejan igual aquí.
+    const where = template.metaTemplateId
+      ? { id: template.id }
+      : { tenantId: req.auth.tenantId, wabaId: template.wabaId, name: template.name };
+    const result = await prisma.template.deleteMany({ where });
+
+    await recordAudit({
+      tenantId: req.auth.tenantId,
+      actorUserId: req.auth.userId,
+      action: 'template.delete',
+      entity: 'template',
+      entityId: template.id,
+      metadata: { name: template.name, language: template.language, deleted: result.count },
+    });
+    res.json({ ok: true, deleted: result.count });
   })
 );
 
