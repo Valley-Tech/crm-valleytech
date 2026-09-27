@@ -15,6 +15,7 @@ import env from '../../config/env.js';
 import {
   findOrCreateConversation,
   pauseBot,
+  shouldBotRespond,
   isWithinServiceWindow,
   windowExpiresAt,
 } from '../../services/conversations.js';
@@ -104,8 +105,9 @@ router.post(
 
     const conversation = await conversationForBot(req.bot, { conversationId, to, phoneNumberId });
 
-    // La regla que hace que el traspaso a humano funcione de verdad.
-    if (!conversation.botActive) {
+    // La regla que hace que el traspaso a humano funcione de verdad
+    // (si la pausa ya caducó por inactividad, se levanta aquí mismo).
+    if (!conversation.botActive && !(await shouldBotRespond(conversation))) {
       throw conflict(
         'bot_paused',
         'Un agente tomó esta conversación: el bot no puede responder ahora.',
@@ -240,11 +242,13 @@ router.get(
         })
       : null;
 
+    // Si la pausa caducó por inactividad, aquí se levanta (el bot en modo espejo consulta esto antes de responder).
+    const botActive = conversation ? await shouldBotRespond(conversation) : true;
     res.json({
       found: Boolean(conversation),
       conversationId: conversation?.id ?? null,
-      botActive: conversation ? conversation.botActive : true,
-      botPausedUntil: conversation?.botPausedUntil ?? null,
+      botActive,
+      botPausedUntil: botActive ? null : conversation?.botPausedUntil ?? null,
       botState: conversation?.botState ?? null,
       contact: contact ? { id: contact.id, waId: contact.waId, name: contact.name } : null,
     });

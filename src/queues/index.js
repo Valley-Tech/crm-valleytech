@@ -8,6 +8,7 @@ export const QUEUE = {
   botDispatch: 'crm.bot-dispatch',
   campaign: 'crm.campaign',
   knowledge: 'crm.knowledge',
+  maintenance: 'crm.maintenance',
 };
 
 const defaultJobOptions = {
@@ -37,7 +38,18 @@ export const knowledgeQueue = new Queue(QUEUE.knowledge, {
   defaultJobOptions: { ...defaultJobOptions, attempts: 2, backoff: { type: 'fixed', delay: 15000 } },
 });
 
-export const allQueues = [inboundQueue, outboundQueue, mediaQueue, botDispatchQueue, campaignQueue, knowledgeQueue];
+// Tareas periódicas (reactivar bots tras la inactividad). Sin reintentos: se repiten solas.
+export const maintenanceQueue = new Queue(QUEUE.maintenance, {
+  connection: redis,
+  defaultJobOptions: { attempts: 1, removeOnComplete: { count: 50 }, removeOnFail: { count: 50 } },
+});
+
+/** Programa las tareas repetitivas (idempotente: BullMQ no duplica un mismo jobId). */
+export async function scheduleMaintenance() {
+  await maintenanceQueue.add('resume-idle-bots', {}, { repeat: { every: 60 * 1000 }, jobId: 'resume-idle-bots' });
+}
+
+export const allQueues = [inboundQueue, outboundQueue, mediaQueue, botDispatchQueue, campaignQueue, knowledgeQueue, maintenanceQueue];
 
 export async function closeQueues() {
   await Promise.all(allQueues.map((queue) => queue.close()));

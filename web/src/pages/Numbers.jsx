@@ -90,7 +90,7 @@ export default function Numbers() {
         <div className="card table-wrap">
           <table className="table">
             <thead>
-              <tr><th>Número</th><th>Nombre verificado</th><th>Calidad</th><th>App de Meta</th><th>Modo</th><th>Último mensaje</th><th>Eco pausa bot</th><th>Activo</th><th></th></tr>
+              <tr><th>Número</th><th>Nombre verificado</th><th>Calidad</th><th>App de Meta</th><th>Modo</th><th>Último mensaje</th><th>Eco pausa bot</th><th>Bot vuelve tras</th><th>Activo</th><th></th></tr>
             </thead>
             <tbody>
               {items.map((i) => (
@@ -111,6 +111,22 @@ export default function Numbers() {
                     <div className="tiny faint">{i.lastWebhookAt ? `webhook ${fmtDateTime(i.lastWebhookAt)}` : 'sin webhooks'}</div>
                   </td>
                   <td><Switch on={i.echoPausesBot} onChange={(v) => update(i, { echoPausesBot: v })} /></td>
+                  <td>
+                    <span className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+                      <input
+                        className="input"
+                        type="number"
+                        min={1}
+                        max={1440}
+                        style={{ width: 64 }}
+                        defaultValue={i.botResumeMinutes ?? 5}
+                        title="Minutos sin mensajes (de nadie) tras una intervención humana para que el bot vuelva a responder"
+                        onBlur={(e) => { const v = Number(e.target.value); if (v >= 1 && v <= 1440 && v !== i.botResumeMinutes) update(i, { botResumeMinutes: v }); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                      />
+                      <span className="tiny faint">min</span>
+                    </span>
+                  </td>
                   <td><Switch on={i.active} onChange={(v) => update(i, { active: v })} /></td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <div className="row" style={{ gap: 6 }}>
@@ -129,6 +145,7 @@ export default function Numbers() {
 
       <div className="card pad small muted">
         <strong>Eco pausa bot:</strong> en un número en coexistencia, cada mensaje enviado desde la app de WhatsApp Business (por una persona o por la IA de Meta) llega como <em>eco</em>. Si activas esta opción, ese eco pausa el chatbot conectado por el Bot Gateway en esa conversación. Déjala apagada si el número usa la IA de Meta.
+        {' '}<strong>Bot vuelve tras:</strong> cuando un humano interviene (responde desde el CRM o desde la app), el chatbot se pausa en ese chat; si pasan esos minutos sin que nadie escriba (ni el cliente ni el humano), el bot se reactiva solo y vuelve a responder. Cada mensaje nuevo reinicia la cuenta.
       </div>
 
       {pending.length > 0 ? (

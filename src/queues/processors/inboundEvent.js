@@ -7,6 +7,8 @@ import {
   findOrCreateConversation,
   touchConversation,
   shouldBotRespond,
+  extendBotPause,
+  pauseBot,
 } from '../../services/conversations.js';
 import { rankOf, serializeMessage } from '../../services/messaging.js';
 import { buildBotEvent, dispatchToBots } from '../../services/botGateway.js';
@@ -225,7 +227,11 @@ async function handleIncomingMessage(integration, value, incoming, options = {})
 
   // options.skipBots: el evento lo reenvió un bot que ya lo está atendiendo
   // (modo espejo), así que no se le vuelve a entregar por el Bot Gateway.
-  if (!options.skipBots && (await shouldBotRespond(updatedConversation))) {
+  const botResponds = await shouldBotRespond(updatedConversation);
+  // Cliente escribió mientras un humano atiende: la pausa vuelve a contar desde cero.
+  if (!botResponds) await extendBotPause({ tenantId, conversation: updatedConversation });
+
+  if (!options.skipBots && botResponds) {
     const payload = buildBotEvent({
       event: 'message.received',
       tenant: integration.tenant,
@@ -374,10 +380,9 @@ async function handleMessageEchoes(integration, value) {
     // el dueño o la IA de Meta, y el webhook no distingue. Solo pausa el bot del
     // Bot Gateway si la integración lo pide explícitamente.
     if (integration.echoPausesBot) {
-      await prisma.conversation.update({
-        where: { id: conversation.id },
-        data: { botActive: false, botPausedUntil: null },
-      });
+      // Pausa con caducidad: tras N minutos sin actividad el bot vuelve solo
+      // (antes quedaba pausado para siempre hasta pulsar "Reactivar bot").
+      await pauseBot({ tenantId, conversationId: conversation.id, reason: 'app_echo' });
     }
   }
 

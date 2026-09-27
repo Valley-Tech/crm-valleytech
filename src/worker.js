@@ -3,13 +3,14 @@ import env from './config/env.js';
 import logger from './lib/logger.js';
 import prisma from './lib/prisma.js';
 import { redis } from './lib/redis.js';
-import { QUEUE, closeQueues } from './queues/index.js';
+import { QUEUE, closeQueues, scheduleMaintenance } from './queues/index.js';
 import processInboundEvent from './queues/processors/inboundEvent.js';
 import processOutboundMessage from './queues/processors/outboundMessage.js';
 import processMediaDownload from './queues/processors/mediaDownload.js';
 import processBotDispatch from './queues/processors/botDispatch.js';
 import processCampaignSend from './queues/processors/campaignSend.js';
 import processKnowledgeIndex from './queues/processors/knowledgeIndex.js';
+import processMaintenance from './queues/processors/maintenance.js';
 
 /**
  * Proceso worker, separado del web a propósito.
@@ -32,7 +33,11 @@ const workers = [
   new Worker(QUEUE.campaign, processCampaignSend, { connection: redis, concurrency: 1 }),
   // Indexar en Gemini puede tardar minutos (rastreo de sitios): de dos en dos.
   new Worker(QUEUE.knowledge, processKnowledgeIndex, { connection: redis, concurrency: 2, lockDuration: 15 * 60 * 1000 }),
+  // Cada minuto: reactivar los bots cuya pausa por intervención humana ya caducó.
+  new Worker(QUEUE.maintenance, processMaintenance, { connection: redis, concurrency: 1 }),
 ];
+
+scheduleMaintenance().catch((err) => logger.error({ err }, 'No se pudieron programar las tareas periódicas'));
 
 for (const worker of workers) {
   worker.on('completed', (job) => logger.debug({ queue: worker.name, jobId: job.id }, 'Trabajo completado'));

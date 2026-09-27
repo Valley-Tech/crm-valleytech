@@ -47,6 +47,7 @@ function serializeIntegration(integration) {
     isCoexistence: integration.isCoexistence,
     onboardingMethod: integration.onboardingMethod,
     echoPausesBot: integration.echoPausesBot,
+    botResumeMinutes: integration.botResumeMinutes,
     active: integration.active,
     connectedAt: integration.connectedAt,
     // App de Meta dueña del token: la del CRM salvo que la integración tenga la suya.
@@ -486,7 +487,7 @@ router.patch(
   '/integrations/:id',
   asyncHandler(async (req, res) => {
     const data = z
-      .object({ active: z.boolean().optional(), echoPausesBot: z.boolean().optional() })
+      .object({ active: z.boolean().optional(), echoPausesBot: z.boolean().optional(), botResumeMinutes: z.number().int().min(1).max(1440).optional() })
       .parse(req.body);
     const integration = await prisma.metaIntegration.findFirst({
       where: { id: req.params.id, tenantId: req.auth.tenantId },

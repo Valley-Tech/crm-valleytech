@@ -742,7 +742,7 @@ function ContactPanel({ conversation: c, notes, users, hasBots, mobile = false, 
             <Switch on={c.botActive} onChange={onToggleBot} disabled={!canWrite} />
           </div>
           {!hasBots ? <p className="tiny faint">Solo aplica a chatbots conectados por el Bot Gateway.</p> : null}
-          {c.botPausedUntil && !c.botActive ? <p className="tiny faint">Se reactiva solo el {fmtDateTime(c.botPausedUntil)}.</p> : null}
+          {c.botPausedUntil && !c.botActive ? <p className="tiny faint">En pausa por intervención humana. Se reactiva solo a las {fmtTime(c.botPausedUntil)} si nadie escribe antes; cada mensaje reinicia la cuenta.</p> : null}
         </div>
 
         <div className="section">
