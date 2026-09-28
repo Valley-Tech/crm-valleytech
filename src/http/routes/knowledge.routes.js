@@ -18,8 +18,48 @@ import { NATIVE_MIME, IMAGE_MIME, MODEL_FALLBACKS, mimeFromName } from '../../ai
  * Agent, pero con tu propia clave de Gemini y para cualquier bot).
  */
 
+/**
+ * Acceso: el SuperAdmin ve la IA de cualquier chatbot; un Dueño/Administrador
+ * solo la de los chatbots que atienden sus números (nunca los que atienden
+ * "todos los números", porque afectarían a otros clientes).
+ */
 const router = Router();
-router.use(requireAuth, requireRole('superadmin'));
+router.use(requireAuth, requireRole('owner'));
+
+function ownBotWhere(req) {
+  const scope = req.auth.scope;
+  return scope.all ? {} : { metaIntegrationId: { in: scope.integrationIds } };
+}
+
+function serializeBotSummary(bot) {
+  return {
+    id: bot.id,
+    name: bot.name,
+    channel: bot.channel,
+    active: bot.active,
+    aiEnabled: bot.aiEnabled ?? false,
+    aiModel: bot.aiModel,
+    lastDispatchAt: bot.lastDispatchAt,
+    metaIntegrationId: bot.metaIntegrationId ?? null,
+    integration: bot.metaIntegration
+      ? { id: bot.metaIntegration.id, displayPhoneNumber: bot.metaIntegration.displayPhoneNumber, verifiedName: bot.metaIntegration.verifiedName, active: bot.metaIntegration.active }
+      : null,
+    knowledgeCount: bot._count?.knowledge ?? 0,
+  };
+}
+
+/** Chatbots que el usuario puede ver (para la página Chatbots de un Dueño). Sin credenciales ni endpoint. */
+router.get(
+  '/bots/mine',
+  asyncHandler(async (req, res) => {
+    const items = await prisma.botIntegration.findMany({
+      where: { tenantId: req.auth.tenantId, ...ownBotWhere(req) },
+      include: { metaIntegration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } }, _count: { select: { knowledge: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    res.json({ items: items.map(serializeBotSummary) });
+  })
+);
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_FILE_BYTES, files: 10 } });
 
@@ -58,7 +98,10 @@ function serializeAi(bot) {
 }
 
 async function loadBot(req) {
-  const bot = await prisma.botIntegration.findFirst({ where: { id: req.params.id, tenantId: req.auth.tenantId } });
+  const bot = await prisma.botIntegration.findFirst({
+    where: { id: req.params.id, tenantId: req.auth.tenantId, ...ownBotWhere(req) },
+    include: { metaIntegration: { select: { id: true, displayPhoneNumber: true, verifiedName: true, active: true } } },
+  });
   if (!bot) throw notFound('Chatbot no encontrado');
   return bot;
 }
@@ -73,7 +116,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const bot = await loadBot(req);
     const sources = await prisma.knowledgeSource.findMany({ where: { botId: bot.id }, orderBy: { createdAt: 'desc' } });
-    res.json({ ...serializeAi(bot), sources: sources.map(serializeSource) });
+    res.json({ ...serializeAi(bot), bot: serializeBotSummary(bot), sources: sources.map(serializeSource) });
   })
 );
 

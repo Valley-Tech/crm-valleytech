@@ -30,7 +30,8 @@ router.use('/api', quickReplyRoutes);
 router.use('/api', metricsRoutes);
 router.use('/api', campaignRoutes);
 router.use('/api', usersRoutes);
-router.use('/api', adminRoutes);
+// Antes del router de administración: este exige superadmin a todo lo que pase por él.
 router.use('/api', knowledgeRoutes);
+router.use('/api', adminRoutes);
 
 export default router;

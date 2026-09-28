@@ -1,3 +1,4 @@
+import { DelayedError } from 'bullmq';
 import prisma from '../../lib/prisma.js';
 import logger from '../../lib/logger.js';
 import { sendMessage } from '../../whatsapp/messages.js';
@@ -34,7 +35,34 @@ async function markFailed(message, { code, reason }) {
   return updated;
 }
 
-export default async function processOutboundMessage(job) {
+/**
+ * Orden por conversación. La cola envía varios mensajes a la vez (concurrencia
+ * 5), así que dos mensajes seguidos de un bot ("Bienvenido…" y luego los
+ * botones) podían llegar a Meta en orden inverso. Antes de enviar uno se
+ * comprueba que no quede otro anterior de la misma conversación aún en cola;
+ * si lo hay, este se aplaza medio segundo (sin gastar reintentos). Si el
+ * anterior lleva demasiado tiempo atascado, se deja pasar para no bloquear.
+ */
+const ORDER_RECHECK_MS = 500;
+const ORDER_MAX_WAIT_MS = 90 * 1000;
+
+async function waitingForEarlier(message) {
+  const earlier = await prisma.message.findFirst({
+    where: {
+      conversationId: message.conversationId,
+      direction: 'outbound',
+      status: 'queued',
+      id: { not: message.id },
+      OR: [{ createdAt: { lt: message.createdAt } }, { createdAt: message.createdAt, id: { lt: message.id } }],
+    },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, createdAt: true },
+  });
+  if (!earlier) return false;
+  return Date.now() - new Date(earlier.createdAt).getTime() < ORDER_MAX_WAIT_MS;
+}
+
+export default async function processOutboundMessage(job, token) {
   const { messageId } = job.data;
 
   const message = await prisma.message.findUnique({
@@ -50,6 +78,12 @@ export default async function processOutboundMessage(job) {
   // Si ya se envió (por un reintento duplicado), no se vuelve a enviar.
   if (message.statusRank >= rankOf('sent')) {
     return { skipped: 'already_sent' };
+  }
+
+  // Respeta el orden: primero el mensaje anterior de la misma conversación.
+  if (message.status === 'queued' && (await waitingForEarlier(message))) {
+    await job.moveToDelayed(Date.now() + ORDER_RECHECK_MS, token);
+    throw new DelayedError();
   }
 
   const conversation = message.conversation;

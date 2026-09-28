@@ -6,8 +6,8 @@ import { I } from './Icons.jsx';
 
 /**
  * Menú por rol. Cada sección solo aparece si tiene al menos una entrada
- * visible: un Dueño no ve "Configuración" (que es solo del SuperAdmin) y un
- * Administrador solo ve en ella "Usuarios".
+ * visible: un Dueño ve en "Configuración" solo "Chatbots" (el suyo, para la IA),
+ * un Administrador además "Usuarios", y el SuperAdmin todo.
  */
 const NAV = [
   { section: 'Operación' },
@@ -19,7 +19,7 @@ const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: I.dashboard, role: 'viewer' },
   { section: 'Configuración' },
   { to: '/numbers', label: 'Números de WhatsApp', icon: I.numbers, role: 'superadmin' },
-  { to: '/bots', label: 'Chatbots', icon: I.bots, role: 'superadmin' },
+  { to: '/bots', label: 'Chatbots', icon: I.bots, role: 'owner' },
   { to: '/users', label: 'Usuarios', icon: I.team, role: 'admin' },
   { to: '/settings', label: 'Ajustes', icon: I.settings, role: 'superadmin' },
 ];

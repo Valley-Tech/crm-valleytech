@@ -1,11 +1,67 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { get, post, patch, del } from '../api.js';
-import { useAuth, useToast } from '../store.jsx';
+import { useAuth, useToast, isSuperAdmin } from '../store.jsx';
 import { useRouter } from '../router.jsx';
 import { Badge, Button, Empty, Field, Loading, Modal, Switch, fmtDateTime } from '../components/ui.jsx';
 import { I } from '../components/Icons.jsx';
 
 export default function Bots() {
+  const { user } = useAuth();
+  return isSuperAdmin(user) ? <AdminBots /> : <OwnerBots />;
+}
+
+/**
+ * Vista del Dueño / Administrador: solo sus chatbots, con la información
+ * básica y la IA (activar/apagar y Conocimiento). Sin registrar, eliminar,
+ * rotar credenciales ni activar/desactivar: eso es del SuperAdmin.
+ */
+function OwnerBots() {
+  const { navigate } = useRouter();
+  const toast = useToast();
+  const [items, setItems] = useState(null);
+
+  const load = useCallback(() => get('/api/bots/mine').then((d) => setItems(d.items)).catch((e) => toast(e.message, { error: true })), [toast]);
+  useEffect(() => { load(); }, [load]);
+
+  async function toggleAi(bot, aiEnabled) {
+    try {
+      await patch(`/api/bots/${bot.id}/ai`, { aiEnabled });
+      setItems((l) => l.map((b) => (b.id === bot.id ? { ...b, aiEnabled } : b)));
+      toast(aiEnabled ? `IA activada en ${bot.name}` : `IA apagada en ${bot.name}`);
+    } catch (err) { toast(err.message, { error: true }); }
+  }
+
+  return (
+    <>
+      <div className="page-head">
+        <p>Tu chatbot responde por el CRM. Aquí activas o apagas su IA y le enseñas con tus documentos, tu sitio web y tus preguntas frecuentes.</p>
+      </div>
+      {items === null ? <Loading /> : items.length === 0 ? (
+        <div className="card"><Empty title="No tienes chatbots asignados" icon={<I.bots />}>Pide al SuperAdmin que asigne tu número a un chatbot.</Empty></div>
+      ) : (
+        <div className="card table-wrap">
+          <table className="table">
+            <thead><tr><th>Chatbot</th><th>Número</th><th>Estado</th><th>IA</th><th>Conocimiento</th><th>Último mensaje atendido</th></tr></thead>
+            <tbody>
+              {items.map((b) => (
+                <tr key={b.id}>
+                  <td><strong>{b.name}</strong> <Badge>{b.channel}</Badge></td>
+                  <td>{b.integration ? <><span className="mono">{b.integration.displayPhoneNumber}</span><div className="tiny faint">{b.integration.verifiedName}</div></> : <span className="faint">todos los números</span>}</td>
+                  <td>{b.active ? <Badge tone="ok">activo</Badge> : <Badge tone="crit">inactivo</Badge>}</td>
+                  <td><span className="row"><Switch on={b.aiEnabled} onChange={(v) => toggleAi(b, v)} />{b.aiEnabled ? <Badge tone="ok">activa</Badge> : <Badge>apagada</Badge>}</span></td>
+                  <td><Button size="sm" onClick={() => navigate(`/bots/${b.id}/ai`)} title="Instrucciones, preguntas frecuentes, archivos y sitios web"><I.bots /> Conocimiento{b.knowledgeCount ? <Badge>{b.knowledgeCount}</Badge> : null}</Button></td>
+                  <td className="small">{fmtDateTime(b.lastDispatchAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function AdminBots() {
   const { config } = useAuth();
   const { navigate } = useRouter();
   const toast = useToast();

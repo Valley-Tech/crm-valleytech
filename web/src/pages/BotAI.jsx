@@ -35,10 +35,10 @@ export default function BotAI({ params }) {
 
   const load = useCallback(async () => {
     try {
-      const [bots, data] = await Promise.all([get('/api/bots'), get(`/api/bots/${botId}/ai`)]);
-      const found = bots.items.find((b) => b.id === botId);
-      if (!found) { toast('Chatbot no encontrado', { error: true }); navigate('/bots'); return; }
-      setBot(found);
+      // /ai ya trae el resumen del bot (funciona para SuperAdmin y para el Dueño del chatbot).
+      const data = await get(`/api/bots/${botId}/ai`);
+      if (!data?.bot) { toast('Chatbot no encontrado', { error: true }); navigate('/bots'); return; }
+      setBot(data.bot);
       setAi(data);
       setForm((f) => f ?? { aiEnabled: data.aiEnabled, aiModel: data.aiModel ?? '', aiInstructions: data.aiInstructions, aiTemperature: data.aiTemperature, aiMaxChars: data.aiMaxChars });
     } catch (err) { toast(err.message, { error: true }); }

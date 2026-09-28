@@ -20,7 +20,7 @@ import Settings from './pages/Settings.jsx';
  *  · viewer/agent/owner/admin ven solo lo de sus números asignados (el
  *    backend filtra; aquí solo se decide qué menú aparece).
  *  · Campañas: desde Dueño. Usuarios: Administrador y SuperAdmin.
- *  · Configuración (Números, Chatbots, Ajustes): solo SuperAdmin.
+ *  · Configuración: Números y Ajustes solo SuperAdmin; Chatbots también para el Dueño (solo el suyo, solo IA).
  */
 const ROUTES = [
   { pattern: '/inbox', page: Inbox, title: 'Bandeja', role: 'viewer' },
@@ -34,8 +34,9 @@ const ROUTES = [
   { pattern: '/users', page: Users, title: 'Usuarios', role: 'admin' },
   { pattern: '/team', page: Users, title: 'Usuarios', role: 'admin' },
   { pattern: '/numbers', page: Numbers, title: 'Números de WhatsApp', role: 'superadmin' },
-  { pattern: '/bots', page: Bots, title: 'Chatbots conectados', role: 'superadmin' },
-  { pattern: '/bots/:botId/ai', page: BotAI, title: 'IA y conocimiento', role: 'superadmin' },
+  // Chatbots: el SuperAdmin administra todos; un Dueño ve solo el suyo (info + IA y conocimiento).
+  { pattern: '/bots', page: Bots, title: 'Chatbots conectados', role: 'owner' },
+  { pattern: '/bots/:botId/ai', page: BotAI, title: 'IA y conocimiento', role: 'owner' },
   { pattern: '/settings', page: Settings, title: 'Ajustes', role: 'superadmin' },
 ];
 
