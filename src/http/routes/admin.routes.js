@@ -514,6 +514,7 @@ function serializeBot(bot) {
     active: bot.active,
     lastDispatchAt: bot.lastDispatchAt,
     aiEnabled: bot.aiEnabled ?? false,
+    aiProvider: bot.aiProvider ?? 'gemini',
     createdAt: bot.createdAt,
   };
 }

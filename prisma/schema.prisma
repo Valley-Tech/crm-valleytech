@@ -247,6 +247,8 @@ model BotIntegration {
   lastDispatchAt DateTime? @map("last_dispatch_at")
   // --- IA (Gemini) y base de conocimiento ---------------------------------
   aiEnabled       Boolean  @default(false) @map("ai_enabled")
+  // Proveedor de IA: "gemini" (Google, con File Search) o "claude" (Anthropic, conocimiento en contexto con caché).
+  aiProvider      String   @default("gemini") @map("ai_provider")
   aiModel         String?  @map("ai_model")
   aiInstructions  String?  @map("ai_instructions")   // quién es el bot, tono, reglas
   aiTemperature   Float    @default(0.4) @map("ai_temperature")
@@ -283,7 +285,9 @@ model KnowledgeSource {
   storageKey   String?  @map("storage_key")   // copia del archivo original
   sourceUrl    String?  @map("source_url")
   content      String?                        // faq: pregunta\n---\nrespuesta · text: el texto
-  documentName String?  @map("document_name") // fileSearchStores/.../documents/...
+  documentName String?  @map("document_name")
+  // Texto extraído de la fuente (markdown), para proveedores sin File Search (Claude).
+  extractedText String? @map("extracted_text") // fileSearchStores/.../documents/...
   documents    Json?                          // varios documentos (sitios web)
   pages        Int      @default(0)
   indexedAt    DateTime? @map("indexed_at")

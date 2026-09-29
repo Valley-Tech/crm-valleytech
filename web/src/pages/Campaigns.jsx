@@ -4,7 +4,7 @@ import { useRouter } from '../router.jsx';
 import { useToast } from '../store.jsx';
 import { getSocket } from '../socket.js';
 import { Badge, Button, Empty, Field, Loading, Modal, Progress, Tabs, fmtDateTime, numberLabel } from '../components/ui.jsx';
-import { TemplatePreview, countParams, buildComponents } from '../components/TemplatePicker.jsx';
+import { TemplatePreview, TemplateParamsFields, buildComponents, emptyValues, valuesComplete } from '../components/TemplatePicker.jsx';
 import { I } from '../components/Icons.jsx';
 
 const TONE = { draft: '', scheduled: 'info', running: 'accent', paused: 'warn', completed: 'ok', cancelled: '', failed: 'crit' };
@@ -165,8 +165,9 @@ function NewCampaign({ numbers, initialNumberId = '', onClose, onDone }) {
   const [templates, setTemplates] = useState([]);
   const [tags, setTags] = useState([]);
   const [form, setForm] = useState({ name: '', integrationId: initialNumberId, templateId: '', segment: 'all', tagList: '', scheduledAt: '' });
-  const [values, setValues] = useState({ header: [], body: [], buttons: {} });
+  const [values, setValues] = useState(emptyValues(null));
   const [preview, setPreview] = useState(null);
+  const [check, setCheck] = useState(null); // { ok, problems, recipients }
   const [busy, setBusy] = useState(false);
 
   // Las plantillas y las etiquetas dependen del número elegido: cada chatbot tiene las suyas.
@@ -179,10 +180,9 @@ function NewCampaign({ numbers, initialNumberId = '', onClose, onDone }) {
   }, [form.integrationId]);
 
   const template = templates.find((t) => t.id === form.templateId) ?? null;
-  const bodyN = countParams(template?.components?.find((c) => c.type === 'BODY')?.text);
   useEffect(() => {
-    setValues({ header: [], body: Array(bodyN).fill('').map((_, i) => (i === 0 ? '{{contact.name}}' : '')), buttons: {} });
-  }, [form.templateId, bodyN]);
+    setValues(emptyValues(template, { firstBody: '{{contact.name|Cliente}}' }));
+  }, [form.templateId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const recipients = useMemo(() => {
     if (form.segment === 'tags') return { tags: form.tagList.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean) };
@@ -193,6 +193,20 @@ function NewCampaign({ numbers, initialNumberId = '', onClose, onDone }) {
     setPreview(null);
     post('/api/campaigns/preview', { recipients, integrationId: form.integrationId || undefined }).then(setPreview).catch(() => setPreview({ count: 0 }));
   }, [recipients, form.integrationId]);
+
+  const components = useMemo(() => (template ? buildComponents(template, values) : []), [template, values]);
+  const localComplete = template ? valuesComplete(template, values) : false;
+
+  // Validación en el servidor (plantilla, parámetros, contactos sin nombre…) con un pequeño retraso al escribir.
+  useEffect(() => {
+    if (!template || !form.integrationId) { setCheck(null); return undefined; }
+    const timer = setTimeout(() => {
+      post('/api/campaigns/validate', { integrationId: form.integrationId, templateName: template.name, templateLanguage: template.language, components, recipients })
+        .then(setCheck)
+        .catch((err) => setCheck({ ok: false, problems: [err.message] }));
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [template, form.integrationId, components, recipients]);
 
   async function submit(e) {
     e.preventDefault();
@@ -205,7 +219,7 @@ function NewCampaign({ numbers, initialNumberId = '', onClose, onDone }) {
         integrationId: form.integrationId,
         templateName: template.name,
         templateLanguage: template.language,
-        components: buildComponents(template, values),
+        components,
         recipients,
         scheduledAt: form.scheduledAt ? new Date(form.scheduledAt).toISOString() : undefined,
       });
@@ -216,10 +230,12 @@ function NewCampaign({ numbers, initialNumberId = '', onClose, onDone }) {
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const sampleContact = { name: preview?.sample?.[0]?.name ?? 'Ana' };
-  const previewValues = { body: values.body.map((v) => v.replace(/\{\{\s*contact\.name\s*\}\}/g, sampleContact.name)) };
+  const fillSample = (v) => (typeof v === 'string' ? v.replace(/\{\{\s*contact\.name(?:\|([^}]*))?\s*\}\}/g, (_, d) => sampleContact.name || d || '') : v);
+  const previewValues = { ...values, body: values.body.map(fillSample), header: values.header.map(fillSample) };
+  const canCreate = Boolean(form.name && form.integrationId && template && preview?.count && localComplete && check?.ok);
 
   return (
-    <Modal title="Nueva campaña" onClose={onClose} wide footer={<Button variant="primary" onClick={submit} loading={busy} disabled={!form.name || !form.integrationId || !template || !preview?.count}>Crear campaña</Button>}>
+    <Modal title="Nueva campaña" onClose={onClose} wide footer={<Button id="create-campaign" variant="primary" onClick={submit} loading={busy} disabled={!canCreate}>Crear campaña</Button>}>
       <div className="grid cols-2">
         <div className="col" style={{ gap: 12 }}>
           <Field label="Nombre interno"><input className="input" value={form.name} onChange={set('name')} placeholder="Promo septiembre" /></Field>
@@ -230,16 +246,12 @@ function NewCampaign({ numbers, initialNumberId = '', onClose, onDone }) {
             </select>
           </Field>
           <Field label="Plantilla aprobada" hint={form.integrationId && templates.length === 0 ? 'Este número no tiene plantillas aprobadas sincronizadas' : undefined}>
-            <select className="select" value={form.templateId} onChange={set('templateId')} disabled={!form.integrationId}>
+            <select id="campaign-template" className="select" value={form.templateId} onChange={set('templateId')} disabled={!form.integrationId}>
               <option value="">Elige…</option>
               {templates.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.language} · {t.category}</option>)}
             </select>
           </Field>
-          {values.body.map((v, i) => (
-            <Field key={i} label={`Parámetro {{${i + 1}}}`} hint="Puedes usar {{contact.name}} o {{contact.customFields.campo}}">
-              <input className="input" value={v} onChange={(e) => setValues((s) => ({ ...s, body: s.body.map((x, j) => (j === i ? e.target.value : x)) }))} />
-            </Field>
-          ))}
+          {template ? <TemplateParamsFields template={template} values={values} onChange={setValues} campaign /> : null}
           <Field label="Segmento">
             <Tabs value={form.segment} onChange={(v) => setForm((f) => ({ ...f, segment: v }))} items={[{ value: 'all', label: 'Todos mis contactos' }, { value: 'tags', label: 'Por etiqueta' }]} />
           </Field>
@@ -253,6 +265,16 @@ function NewCampaign({ numbers, initialNumberId = '', onClose, onDone }) {
         <div className="col" style={{ gap: 12 }}>
           <div className="kpi"><span className="v">{preview ? preview.count : '…'}</span><span className="k">contactos recibirán la plantilla</span>{preview?.sample?.length ? <span className="d">p. ej. {preview.sample.map((s) => s.name || s.waId).join(', ')}</span> : null}</div>
           {template ? <><span className="label">Vista previa</span><TemplatePreview template={template} values={previewValues} /></> : <Empty title="Elige una plantilla para ver la vista previa" />}
+          {template && check ? (
+            check.ok ? (
+              <div className="callout small" id="campaign-check-ok">✔ Plantilla y parámetros verificados con Meta: la campaña se puede crear.</div>
+            ) : (
+              <div className="callout warn small" id="campaign-check-problems">
+                <strong>Antes de crear la campaña:</strong>
+                <ul style={{ margin: '4px 0 0 18px' }}>{check.problems.map((p) => <li key={p}>{p}</li>)}</ul>
+              </div>
+            )
+          ) : null}
           <div className="callout warn small">Las plantillas de marketing tienen costo por mensaje y los clientes pueden bloquear al número si reciben demasiadas. Empieza con segmentos pequeños.</div>
         </div>
       </div>

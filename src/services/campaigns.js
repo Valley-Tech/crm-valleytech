@@ -4,6 +4,7 @@ import { badRequest, notFound, conflict } from '../lib/errors.js';
 import { campaignQueue } from '../queues/index.js';
 import { publishEvent } from '../realtime/events.js';
 import { contactWhere } from './access.js';
+import { validateTemplateComponents } from './templateParams.js';
 
 /**
  * Campañas: envío masivo de una plantilla aprobada a un segmento de contactos.
@@ -13,25 +14,9 @@ import { contactWhere } from './access.js';
  * así hereda el límite de tasa y los reintentos de cualquier otro envío.
  */
 
-/** Resuelve {{contact.name}}, {{contact.waId}} y {{contact.customFields.x}}. */
-export function resolveParam(raw, contact) {
-  if (typeof raw !== 'string') return raw;
-  return raw.replace(/\{\{\s*contact\.([\w.]+)\s*\}\}/g, (_, path) => {
-    const value = path.split('.').reduce((acc, key) => (acc == null ? undefined : acc[key]), contact);
-    return value == null ? '' : String(value);
-  });
-}
-
-/** Sustituye los parámetros de texto en los componentes de la plantilla. */
-export function buildComponentsFor(components, contact) {
-  if (!Array.isArray(components)) return [];
-  return components.map((component) => ({
-    ...component,
-    parameters: (component.parameters ?? []).map((param) =>
-      param.type === 'text' ? { ...param, text: resolveParam(param.text, contact) } : param
-    ),
-  }));
-}
+// Los parámetros de plantilla (resolver {{contact.x|defecto}}, validar contra la
+// plantilla, construir componentes por contacto) viven en templateParams.js.
+export { resolveParam, buildComponentsFor } from './templateParams.js';
 
 /**
  * Construye la lista de destinatarios a partir del filtro elegido.
@@ -70,6 +55,11 @@ export async function createCampaign({ tenantId, userId, scope, input }) {
 
   const contacts = await selectContacts({ tenantId, scope, integrationId: integration.id, ...input.recipients });
   if (contacts.length === 0) throw badRequest('El segmento elegido no tiene contactos');
+
+  // Nada se guarda si los parámetros no cuadran con la plantilla: Meta lo
+  // rechazaría después (131008, 132012…) y la campaña quedaría "fallida".
+  const check = validateTemplateComponents(template, input.components ?? [], { contacts });
+  if (!check.ok) throw badRequest(`La campaña no se puede crear: ${check.problems.join(' · ')}`, { problems: check.problems });
 
   const campaign = await prisma.$transaction(async (tx) => {
     const created = await tx.campaign.create({

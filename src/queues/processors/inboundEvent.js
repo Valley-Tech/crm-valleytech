@@ -258,6 +258,8 @@ function extractText(incoming) {
   if (incoming.document?.caption) return incoming.document.caption;
   if (incoming.order) return '[pedido del catálogo]';
   if (incoming.location) return '[ubicación]';
+  // Meta no entrega ciertos tipos (encuestas, eventos, "ver una vez", mensajes temporales…).
+  if (incoming.type === 'unsupported' || incoming.errors) return '[mensaje no compatible con la API]';
   return null;
 }
 
@@ -348,11 +350,15 @@ async function handleMessageEchoes(integration, value) {
           direction: 'outbound',
           source: 'smb_echo',
           type: echo.type ?? 'text',
-          text: echo.text?.body ?? null,
+          text: echo.text?.body ?? echo[echo.type]?.caption ?? null,
           content: echo,
           waMessageId: echo.id,
           status: 'sent',
           statusRank: rankOf('sent'),
+          // Archivos enviados desde la app: con el id de Meta el CRM los descarga (antes quedaban "pendientes").
+          mediaId: MEDIA_TYPES.has(echo.type) ? echo[echo.type]?.id : undefined,
+          mediaMimeType: MEDIA_TYPES.has(echo.type) ? echo[echo.type]?.mime_type : undefined,
+          mediaFilename: echo.type === 'document' ? echo.document?.filename : undefined,
         },
       });
     } catch (err) {
@@ -363,10 +369,13 @@ async function handleMessageEchoes(integration, value) {
     await touchConversation({
       conversationId: conversation.id,
       direction: 'outbound',
-      preview: echo.text?.body ?? `[${echo.type}]`,
+      preview: echo.text?.body ?? echo[echo.type]?.caption ?? `[${echo.type}]`,
     });
 
     const saved = await prisma.message.findUnique({ where: { waMessageId: echo.id } });
+    if (saved?.mediaId) {
+      await mediaQueue.add('download', { messageId: saved.id }, { jobId: `media-${saved.id}` });
+    }
     if (saved) {
       await publishEvent({
         tenantId,

@@ -14,6 +14,7 @@ import {
   selectContacts,
 } from '../../services/campaigns.js';
 import { integrationWhere, canSeeIntegration } from '../../services/access.js';
+import { validateTemplateComponents, templateSpec } from '../../services/templateParams.js';
 
 /**
  * Campañas. Cada una sale por un número concreto (integrationId) y usa una
@@ -94,6 +95,43 @@ const createSchema = z.object({
   }),
   scheduledAt: z.string().datetime().optional(),
 });
+
+/**
+ * Validación completa antes de crear: plantilla existente y aprobada en la
+ * WABA del número, parámetros que cuadran con la plantilla, sin caracteres
+ * que Meta rechaza y sin campos de contacto vacíos. Devuelve la lista de
+ * problemas para mostrarla en el formulario; con lista vacía se puede crear.
+ */
+router.post(
+  '/campaigns/validate',
+  asyncHandler(async (req, res) => {
+    const input = createSchema.partial({ name: true, recipients: true }).extend({ recipients: createSchema.shape.recipients.optional() }).parse(req.body);
+    const problems = [];
+    if (!canSeeIntegration(req.auth.scope, input.integrationId)) throw forbidden('Ese número no está entre los que administras');
+    const integration = await prisma.metaIntegration.findFirst({ where: { id: input.integrationId, tenantId: req.auth.tenantId, active: true } });
+    if (!integration) problems.push('El número que envía no existe o está inactivo.');
+
+    let template = null;
+    let spec = null;
+    if (integration) {
+      template = await prisma.template.findFirst({ where: { tenantId: req.auth.tenantId, wabaId: integration.wabaId, name: input.templateName, language: input.templateLanguage ?? 'es' } });
+      if (!template) problems.push(`La plantilla "${input.templateName}" (${input.templateLanguage ?? 'es'}) no existe para el número ${integration.displayPhoneNumber}. Sincroniza las plantillas de ese número o revisa el nombre.`);
+      else if (template.status !== 'approved') problems.push(`La plantilla "${template.name}" no está aprobada (estado: ${template.status}).`);
+    }
+
+    let contacts = [];
+    if (input.recipients) {
+      contacts = await selectContacts({ tenantId: req.auth.tenantId, scope: req.auth.scope, integrationId: input.integrationId, ...input.recipients }).catch(() => []);
+      if (contacts.length === 0) problems.push('El segmento elegido no tiene contactos.');
+    }
+    if (template) {
+      const check = validateTemplateComponents(template, input.components ?? [], { contacts });
+      problems.push(...check.problems);
+      spec = check.spec;
+    }
+    res.json({ ok: problems.length === 0, problems, spec: spec ?? (template ? templateSpec(template) : null), recipients: contacts.length });
+  })
+);
 
 /** Vista previa del segmento antes de crear: cuántos contactos entrarían. */
 router.post(

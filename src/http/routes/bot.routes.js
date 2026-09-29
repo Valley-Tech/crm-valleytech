@@ -10,7 +10,7 @@ import { recordUsage } from '../../services/usage.js';
 import { publishEvent } from '../../realtime/events.js';
 import { inboundQueue } from '../../queues/index.js';
 import logger from '../../lib/logger.js';
-import { answer, conversationHistory, historyFromMessages } from '../../ai/knowledge.js';
+import { answer, conversationHistory, historyFromMessages, aiReadiness, READINESS_MESSAGES } from '../../ai/knowledge.js';
 import env from '../../config/env.js';
 import {
   findOrCreateConversation,
@@ -334,12 +334,18 @@ router.get(
   '/ai/config',
   asyncHandler(async (req, res) => {
     const bot = await prisma.botIntegration.findUnique({ where: { id: req.bot.id } });
-    const sources = await prisma.knowledgeSource.groupBy({ by: ['kind', 'status'], where: { botId: bot.id }, _count: { _all: true } });
+    const [sources, readiness] = await Promise.all([
+      prisma.knowledgeSource.groupBy({ by: ['kind', 'status'], where: { botId: bot.id }, _count: { _all: true } }),
+      aiReadiness(bot),
+    ]);
     res.json({
-      aiEnabled: bot.aiEnabled && Boolean(env.GEMINI_API_KEY),
-      model: bot.aiModel || env.GEMINI_MODEL,
+      // true solo si la IA está activa, tiene conocimiento indexado y el proveedor tiene clave.
+      aiEnabled: readiness.ready,
+      reason: readiness.reason,
+      provider: readiness.provider,
+      model: bot.aiModel || (readiness.provider === 'claude' ? env.CLAUDE_MODEL : env.GEMINI_MODEL),
       maxChars: bot.aiMaxChars,
-      hasKnowledge: sources.some((s) => s.status === 'ready'),
+      hasKnowledge: readiness.readySources > 0,
       sources: sources.map((s) => ({ kind: s.kind, status: s.status, count: s._count._all })),
     });
   })
@@ -365,8 +371,9 @@ router.post(
       .parse(req.body);
 
     const bot = await prisma.botIntegration.findUnique({ where: { id: req.bot.id } });
-    if (!bot.aiEnabled) throw conflict('ai_disabled', 'La IA de este chatbot está desactivada en el CRM (Chatbots → IA y conocimiento).');
-    if (!env.GEMINI_API_KEY) throw conflict('ai_not_configured', 'El CRM no tiene GEMINI_API_KEY configurada.');
+    // La IA solo responde si está activa, tiene conocimiento indexado y hay clave del proveedor.
+    const readiness = await aiReadiness(bot);
+    if (!readiness.ready) throw conflict(readiness.reason, READINESS_MESSAGES[readiness.reason]);
 
     let history = [];
     if (input.history) {

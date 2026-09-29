@@ -9,7 +9,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 import { recordAudit } from '../../services/audit.js';
 import { putObject } from '../../storage/index.js';
 import { knowledgeQueue } from '../../queues/index.js';
-import { MAX_FILE_BYTES, removeSource, answer, historyFromMessages } from '../../ai/knowledge.js';
+import { MAX_FILE_BYTES, removeSource, answer, historyFromMessages, aiReadiness, READINESS_MESSAGES, AI_PROVIDERS, CLAUDE_MODELS } from '../../ai/knowledge.js';
 import { NATIVE_MIME, IMAGE_MIME, MODEL_FALLBACKS, mimeFromName } from '../../ai/gemini.js';
 
 /**
@@ -38,6 +38,7 @@ function serializeBotSummary(bot) {
     channel: bot.channel,
     active: bot.active,
     aiEnabled: bot.aiEnabled ?? false,
+    aiProvider: bot.aiProvider ?? 'gemini',
     aiModel: bot.aiModel,
     lastDispatchAt: bot.lastDispatchAt,
     metaIntegrationId: bot.metaIntegrationId ?? null,
@@ -83,17 +84,24 @@ function serializeSource(s) {
   };
 }
 
-function serializeAi(bot) {
+async function serializeAi(bot) {
+  const readiness = await aiReadiness(bot);
   return {
     aiEnabled: bot.aiEnabled,
+    aiProvider: readiness.provider,
     aiModel: bot.aiModel,
     aiInstructions: bot.aiInstructions ?? '',
     aiTemperature: bot.aiTemperature,
     aiMaxChars: bot.aiMaxChars,
     fileSearchStore: bot.fileSearchStore,
     geminiConfigured: Boolean(env.GEMINI_API_KEY),
+    claudeConfigured: Boolean(env.ANTHROPIC_API_KEY),
     defaultModel: env.GEMINI_MODEL,
+    defaultClaudeModel: env.CLAUDE_MODEL,
     models: [...new Set([env.GEMINI_MODEL, ...MODEL_FALLBACKS])],
+    claudeModels: CLAUDE_MODELS,
+    // Estado real: la IA responde solo si está activa, con conocimiento listo y clave del proveedor.
+    readiness: { ...readiness, message: readiness.reason ? READINESS_MESSAGES[readiness.reason] : null },
   };
 }
 
@@ -116,7 +124,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const bot = await loadBot(req);
     const sources = await prisma.knowledgeSource.findMany({ where: { botId: bot.id }, orderBy: { createdAt: 'desc' } });
-    res.json({ ...serializeAi(bot), bot: serializeBotSummary(bot), sources: sources.map(serializeSource) });
+    res.json({ ...(await serializeAi(bot)), bot: serializeBotSummary(bot), sources: sources.map(serializeSource) });
   })
 );
 
@@ -127,15 +135,25 @@ router.patch(
     const data = z
       .object({
         aiEnabled: z.boolean().optional(),
+        aiProvider: z.enum(['gemini', 'claude']).optional(),
         aiModel: z.string().max(80).nullable().optional(),
         aiInstructions: z.string().max(20000).optional(),
         aiTemperature: z.number().min(0).max(1).optional(),
         aiMaxChars: z.number().int().min(120).max(3000).optional(),
       })
       .parse(req.body);
+
+    // Activar la IA exige conocimiento indexado y clave del proveedor: sin eso, el bot sigue con sus menús.
+    if (data.aiEnabled === true) {
+      const readiness = await aiReadiness({ ...bot, aiProvider: data.aiProvider ?? bot.aiProvider, aiEnabled: true });
+      if (!readiness.ready) throw badRequest(READINESS_MESSAGES[readiness.reason]);
+    }
+    // Al cambiar de proveedor, el modelo del otro proveedor deja de aplicar.
+    if (data.aiProvider && data.aiProvider !== bot.aiProvider && data.aiModel === undefined) data.aiModel = null;
+
     const updated = await prisma.botIntegration.update({ where: { id: bot.id }, data });
     await recordAudit({ tenantId: req.auth.tenantId, actorUserId: req.auth.userId, action: 'bot.ai.update', entity: 'bot', entityId: bot.id, metadata: Object.keys(data) });
-    res.json(serializeAi(updated));
+    res.json(await serializeAi(updated));
   })
 );
 
@@ -271,7 +289,16 @@ router.delete(
     if (!source) throw notFound('Fuente no encontrada');
     await removeSource(source);
     await recordAudit({ tenantId: req.auth.tenantId, actorUserId: req.auth.userId, action: 'bot.knowledge.delete', entity: 'bot', entityId: bot.id, metadata: { source: source.name, kind: source.kind } });
-    res.json({ ok: true });
+    // Si se quedó sin conocimiento, la IA se apaga sola: no responde "a ciegas".
+    let aiDisabled = false;
+    if (bot.aiEnabled) {
+      const readiness = await aiReadiness(bot);
+      if (readiness.reason === 'ai_no_knowledge') {
+        await prisma.botIntegration.update({ where: { id: bot.id }, data: { aiEnabled: false } });
+        aiDisabled = true;
+      }
+    }
+    res.json({ ok: true, aiDisabled });
   })
 );
 

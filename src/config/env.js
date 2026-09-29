@@ -56,6 +56,9 @@ const schema = z.object({
   // IA de los chatbots (Gemini). Sin clave, la sección "IA y conocimiento" avisa y no funciona.
   GEMINI_API_KEY: z.string().optional().default(''),
   GEMINI_MODEL: z.string().optional().default('gemini-3.8-flash'),
+  // Claude (Anthropic) como proveedor alternativo de IA por chatbot.
+  ANTHROPIC_API_KEY: z.string().optional().default(''),
+  CLAUDE_MODEL: z.string().optional().default('claude-haiku-4-5-20251001'),
 
   BOT_PAUSE_MINUTES: z.coerce.number().int().positive().default(30),
   OUTBOUND_RATE_PER_SECOND: z.coerce.number().int().positive().default(20),

@@ -212,6 +212,8 @@ table.table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .tb-phone { background: var(--paper); border: 1px solid var(--rule); border-radius: 14px; padding: 16px 12px; min-height: 200px; }
 .tb-phone .msg { white-space: pre-wrap; }
 .tb-side { position: sticky; top: 0; align-self: flex-start; }
+.msg .unsupported { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; color: var(--ink-soft); }
+.msg .unsupported svg { width: 16px; height: 16px; color: var(--warn); }
 @media (max-width: 860px) { .tb-side { position: static; } }
 .nav { display: flex; flex-direction: column; gap: 2px; padding: 8px; flex: 1; overflow-y: auto; }
 .nav .section { padding: 12px 10px 4px; }

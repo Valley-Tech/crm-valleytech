@@ -40,7 +40,7 @@ export default function BotAI({ params }) {
       if (!data?.bot) { toast('Chatbot no encontrado', { error: true }); navigate('/bots'); return; }
       setBot(data.bot);
       setAi(data);
-      setForm((f) => f ?? { aiEnabled: data.aiEnabled, aiModel: data.aiModel ?? '', aiInstructions: data.aiInstructions, aiTemperature: data.aiTemperature, aiMaxChars: data.aiMaxChars });
+      setForm((f) => f ?? { aiEnabled: data.aiEnabled, aiProvider: data.aiProvider ?? 'gemini', aiModel: data.aiModel ?? '', aiInstructions: data.aiInstructions, aiTemperature: data.aiTemperature, aiMaxChars: data.aiMaxChars });
     } catch (err) { toast(err.message, { error: true }); }
   }, [botId, toast, navigate]);
   useEffect(() => { load(); }, [load]);
@@ -55,11 +55,11 @@ export default function BotAI({ params }) {
   async function saveSettings(partial) {
     setSaving(true);
     try {
-      const data = partial ?? { aiEnabled: form.aiEnabled, aiModel: form.aiModel || null, aiInstructions: form.aiInstructions, aiTemperature: Number(form.aiTemperature), aiMaxChars: Number(form.aiMaxChars) };
+      const data = partial ?? { aiProvider: form.aiProvider, aiModel: form.aiModel || null, aiInstructions: form.aiInstructions, aiTemperature: Number(form.aiTemperature), aiMaxChars: Number(form.aiMaxChars) };
       const updated = await patch(`/api/bots/${botId}/ai`, data);
       setAi((a) => ({ ...a, ...updated }));
-      setForm((f) => ({ ...f, ...(partial ?? {}) }));
-      toast('Guardado');
+      setForm((f) => ({ ...f, ...(partial ?? {}), aiEnabled: updated.aiEnabled, aiProvider: updated.aiProvider, aiModel: updated.aiModel ?? '' }));
+      toast(partial?.aiEnabled === true ? 'IA activada' : partial?.aiEnabled === false ? 'IA apagada' : 'Guardado');
     } catch (err) { toast(err.message, { error: true }); } finally { setSaving(false); }
   }
 
@@ -67,8 +67,8 @@ export default function BotAI({ params }) {
     if (!confirm) return;
     setBusy(true);
     try {
-      await del(`/api/bots/${botId}/knowledge/${confirm.id}`);
-      toast('Fuente eliminada');
+      const r = await del(`/api/bots/${botId}/knowledge/${confirm.id}`);
+      toast(r?.aiDisabled ? 'Fuente eliminada. La IA se apagó porque el chatbot se quedó sin conocimiento.' : 'Fuente eliminada');
       setConfirm(null);
       load();
     } catch (err) { toast(err.message, { error: true }); } finally { setBusy(false); }
@@ -90,23 +90,31 @@ export default function BotAI({ params }) {
             <button className="btn ghost icon" onClick={() => navigate('/bots')} aria-label="Volver"><I.back /></button>
             <h2 style={{ margin: 0 }}>{bot.name} · IA y conocimiento</h2>
           </div>
-          <p>Enseña a la IA de este chatbot con tus propios documentos, tu sitio web y tus preguntas frecuentes. Responde con Gemini usando solo esa información.</p>
+          <p>Enseña a la IA de este chatbot con tus propios documentos, tu sitio web y tus preguntas frecuentes. Responde usando solo esa información; sin IA, el chatbot sigue con sus menús, plantillas y flujos.</p>
         </div>
         <div className="row" style={{ gap: 10 }}>
-          <span className="small muted">{ai.aiEnabled ? 'IA activa' : 'IA desactivada'}</span>
-          <Switch on={form.aiEnabled} onChange={(v) => saveSettings({ aiEnabled: v })} disabled={!ai.geminiConfigured} />
+          <span className="small muted">{ai.readiness?.ready ? 'IA activa y lista' : form.aiEnabled ? 'IA activa (sin responder)' : 'IA desactivada'}</span>
+          <Switch on={form.aiEnabled} onChange={(v) => saveSettings({ aiEnabled: v })} disabled={!form.aiEnabled && (ai.readiness?.reason === 'ai_no_knowledge' || ai.readiness?.reason === 'ai_not_configured')} label="" />
         </div>
       </div>
 
-      {!ai.geminiConfigured ? (
-        <div className="callout crit small">El servidor no tiene <code>GEMINI_API_KEY</code>. Crea una clave en Google AI Studio y ponla en las variables del CRM (web y worker) para activar la IA.</div>
+      {ai.readiness && !ai.readiness.ready ? (
+        <div className={`callout ${ai.readiness.reason === 'ai_disabled' ? '' : 'warn'} small`} id="ai-readiness">
+          {ai.readiness.reason === 'ai_no_knowledge' ? (
+            <><strong>La IA no se puede activar todavía.</strong> Agrega al menos una fuente de conocimiento (archivo, sitio web, texto o pregunta frecuente) y espera a que quede "lista". Sin conocimiento, el chatbot responde solo con sus menús y plantillas.</>
+          ) : ai.readiness.reason === 'ai_not_configured' ? (
+            <><strong>Falta la clave del proveedor en el servidor.</strong> {form.aiProvider === 'claude' ? <>Pon <code>ANTHROPIC_API_KEY</code></> : <>Pon <code>GEMINI_API_KEY</code></>} en las variables del CRM (web y worker).</>
+          ) : (
+            <>La IA está apagada: el chatbot atiende con sus menús, plantillas y flujos. Actívala arriba cuando quieras que responda preguntas libres con este conocimiento.</>
+          )}
+        </div>
       ) : null}
 
       <div className="card pad">
         <div className="row between wrap">
           <div>
             <strong>{completed} de 4 pasos completados</strong>
-            <div className="small muted">{ready} fuente{ready === 1 ? '' : 's'} lista{ready === 1 ? '' : 's'} · Modelo: <span className="mono">{form.aiModel || ai.defaultModel}</span></div>
+            <div className="small muted">{ready} fuente{ready === 1 ? '' : 's'} lista{ready === 1 ? '' : 's'} · {form.aiProvider === 'claude' ? 'Claude' : 'Gemini'}: <span className="mono">{form.aiModel || (form.aiProvider === 'claude' ? ai.defaultClaudeModel : ai.defaultModel)}</span></div>
           </div>
           <div className="progress-bar" aria-hidden="true"><span style={{ width: `${(completed / 4) * 100}%` }} /></div>
         </div>
@@ -116,10 +124,18 @@ export default function BotAI({ params }) {
       <Section done={done.instructions} title="Información del negocio e instrucciones" hint="Cuéntale a la IA quién es, qué vende el negocio, horario, tono y qué NO debe hacer.">
         <textarea className="textarea" rows={9} value={form.aiInstructions} onChange={(e) => setForm((f) => ({ ...f, aiInstructions: e.target.value }))} placeholder={`Eres Misha, la asesora virtual de Mishabella, tienda de moda en Colombia. Ayudas a elegir tallas y colores, explicas envíos y pagos y guías al cliente a comprar desde el catálogo de WhatsApp…`} />
         <div className="row wrap" style={{ gap: 12 }}>
+          <Field label="Proveedor de IA" hint={form.aiProvider === 'claude' ? 'Conocimiento en contexto con caché; PDF, imágenes, texto y web. Word/Excel solo con Gemini.' : 'Búsqueda en documentos (File Search); lee PDF, Word, Excel, PowerPoint, imágenes y web.'}>
+            <select id="ai-provider" className="select" value={form.aiProvider} onChange={(e) => setForm((f) => ({ ...f, aiProvider: e.target.value, aiModel: '' }))}>
+              <option value="gemini">Gemini (Google){ai.geminiConfigured ? '' : ' · sin clave'}</option>
+              <option value="claude">Claude (Anthropic){ai.claudeConfigured ? '' : ' · sin clave'}</option>
+            </select>
+          </Field>
           <Field label="Modelo" hint="Vacío = el del servidor">
             <select className="select" value={form.aiModel} onChange={(e) => setForm((f) => ({ ...f, aiModel: e.target.value }))}>
-              <option value="">Por defecto ({ai.defaultModel})</option>
-              {ai.models.map((m) => <option key={m} value={m}>{m}</option>)}
+              <option value="">Por defecto ({form.aiProvider === 'claude' ? ai.defaultClaudeModel : ai.defaultModel})</option>
+              {form.aiProvider === 'claude'
+                ? (ai.claudeModels ?? []).map((m) => <option key={m.value} value={m.value}>{m.label}</option>)
+                : ai.models.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </Field>
           <Field label="Creatividad" hint="0 = literal · 1 = creativa">

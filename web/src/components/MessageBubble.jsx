@@ -240,9 +240,32 @@ function Body({ message }) {
   }
   if (type === 'reaction') return <div style={{ fontSize: '1.4rem' }}>{raw.reaction?.emoji ?? '👍'}</div>;
   if (type === 'system') return <div>{raw.system?.body ?? 'Evento del sistema'}</div>;
-  if (type === 'unsupported' || raw.errors) return <div className="muted">Mensaje no soportado por la API{raw.errors?.[0]?.title ? `: ${raw.errors[0].title}` : ''}</div>;
+  if (type === 'unsupported' || raw.errors) return <Unsupported error={raw.errors?.[0]} />;
   if (type === 'template') return <Template template={raw.template ?? { name: 'plantilla', language: '' }} />;
   return <div className="muted">[{type}]</div>;
+}
+
+/**
+ * Mensaje que WhatsApp no entrega a la API (código 131051 "Message type unknown"
+ * o "This message is unavailable"): encuestas, eventos, fotos/videos de "ver una
+ * vez", mensajes temporales, mensajes eliminados o algunos reenvíos. El CRM no
+ * puede mostrar su contenido; solo pedirle al cliente que lo reenvíe.
+ */
+function Unsupported({ error }) {
+  const title = error?.title ?? '';
+  const unavailable = /unavailable/i.test(title) || /unavailable/i.test(error?.message ?? '');
+  return (
+    <div className="unsupported">
+      <div className="row" style={{ gap: 6 }}><I.info /> <strong>{unavailable ? 'Mensaje no disponible' : 'Mensaje no compatible'}</strong></div>
+      <div className="small">
+        {unavailable
+          ? 'El cliente envió algo que WhatsApp no entrega a las aplicaciones (foto o video de "ver una vez", mensaje temporal o eliminado).'
+          : 'El cliente envió un tipo de mensaje que WhatsApp no entrega a las aplicaciones (encuesta, evento, "ver una vez", mensaje temporal o algunos reenvíos).'}
+        {' '}Pídele que lo reenvíe como texto, foto normal o documento.
+      </div>
+      {title ? <div className="tiny faint mono">{title}{error?.code ? ` · ${error.code}` : ''}</div> : null}
+    </div>
+  );
 }
 
 export function MessageBubble({ message }) {

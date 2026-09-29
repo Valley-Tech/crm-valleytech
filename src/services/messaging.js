@@ -2,6 +2,7 @@ import prisma from '../lib/prisma.js';
 import { notFound, unprocessable, badRequest } from '../lib/errors.js';
 import { outboundQueue } from '../queues/index.js';
 import { publishEvent } from '../realtime/events.js';
+import { validateTemplateComponents } from './templateParams.js';
 import { isWithinServiceWindow, windowExpiresAt, touchConversation, resolveIntegration } from './conversations.js';
 
 /**
@@ -68,6 +69,21 @@ export async function sendOutbound({
       'no_integration',
       'Esta conversación no tiene un número de WhatsApp activo (el número fue eliminado o desactivado). No se puede enviar.'
     );
+  }
+
+  // Plantilla desde la bandeja o una campaña: si el CRM la conoce, se comprueban
+  // los parámetros antes de encolar (los bots pueden usar plantillas no sincronizadas).
+  if (message.type === 'template' && source !== 'bot') {
+    const known = await prisma.template.findFirst({
+      where: { tenantId, wabaId: integration.wabaId, name: message.template.name, language: message.template.language ?? 'es' },
+    });
+    if (known) {
+      if (known.status !== 'approved') {
+        throw badRequest(`La plantilla "${known.name}" no está aprobada (estado: ${known.status})`);
+      }
+      const check = validateTemplateComponents(known, message.template.components ?? [], { contacts: [conversation.contact] });
+      if (!check.ok) throw badRequest(`Revisa los parámetros de la plantilla: ${check.problems.join(' · ')}`, { problems: check.problems });
+    }
   }
 
   const insideWindow = isWithinServiceWindow(conversation);
