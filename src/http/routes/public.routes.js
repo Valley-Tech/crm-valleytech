@@ -17,6 +17,8 @@ router.get('/api/config/public', (req, res) => {
     metaGraphVersion: env.META_API_VERSION,
     embeddedSignupConfigId: env.META_EMBEDDED_SIGNUP_CONFIG_ID || null,
     publicUrl: env.PUBLIC_URL,
+    // Solo el tipo de almacenamiento (sin bucket ni credenciales): la página Ajustes lo muestra.
+    storage: env.STORAGE_DRIVER === 's3' ? `S3 (${env.S3_PREFIX || '/'})` : 'disco local (solo para pruebas)',
   });
 });
 

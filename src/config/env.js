@@ -42,12 +42,24 @@ const schema = z.object({
   META_WEBHOOK_VERIFY_TOKEN: z.string().min(8, 'META_WEBHOOK_VERIFY_TOKEN debe tener al menos 8 caracteres'),
   META_EMBEDDED_SIGNUP_CONFIG_ID: z.string().optional().default(''),
 
-  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  // Almacenamiento de archivos (multimedia de los chats, archivos de conocimiento).
+  // "local" solo sirve con UN servicio: en Railway web y worker son servicios
+  // distintos con discos distintos, así que en producción usa S3.
+  // Acepta las mismas variables que ya usan los bots: AWS_BUCKET_NAME, AWS_REGION,
+  // AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (o las S3_* equivalentes). Si hay
+  // bucket y STORAGE_DRIVER no está definido, se usa S3 automáticamente.
+  STORAGE_DRIVER: z.enum(['local', 's3']).optional(),
   STORAGE_LOCAL_DIR: z.string().default('./storage'),
   S3_BUCKET: z.string().optional().default(''),
+  AWS_BUCKET_NAME: z.string().optional().default(''),
   S3_REGION: z.string().optional().default(''),
+  AWS_REGION: z.string().optional().default(''),
   S3_ACCESS_KEY_ID: z.string().optional().default(''),
+  AWS_ACCESS_KEY_ID: z.string().optional().default(''),
   S3_SECRET_ACCESS_KEY: z.string().optional().default(''),
+  AWS_SECRET_ACCESS_KEY: z.string().optional().default(''),
+  // Carpeta dentro del bucket para todo lo del CRM (así convive con los comprobantes de los bots).
+  S3_PREFIX: z.string().optional().default('crm/'),
   // Para Cloudflare R2, Backblaze B2, MinIO…: URL del endpoint compatible con S3.
   S3_ENDPOINT: z.string().optional().default(''),
   // Convertir notas de voz (ogg/opus) a mp3 si hay ffmpeg. "false" para desactivar.
@@ -89,8 +101,17 @@ if (!parsed.success) {
 
 const env = parsed.data;
 
+// Unifica S3_* y AWS_* (los bots ya usan AWS_*): gana la S3_* si están las dos.
+env.S3_BUCKET = env.S3_BUCKET || env.AWS_BUCKET_NAME;
+env.S3_REGION = env.S3_REGION || env.AWS_REGION;
+env.S3_ACCESS_KEY_ID = env.S3_ACCESS_KEY_ID || env.AWS_ACCESS_KEY_ID;
+env.S3_SECRET_ACCESS_KEY = env.S3_SECRET_ACCESS_KEY || env.AWS_SECRET_ACCESS_KEY;
+if (!env.STORAGE_DRIVER) env.STORAGE_DRIVER = env.S3_BUCKET ? 's3' : 'local';
+env.S3_PREFIX = String(env.S3_PREFIX ?? '').replace(/^\/+/, '');
+if (env.S3_PREFIX && !env.S3_PREFIX.endsWith('/')) env.S3_PREFIX += '/';
+
 if (env.STORAGE_DRIVER === 's3' && !env.S3_BUCKET) {
-  console.error('STORAGE_DRIVER=s3 requiere S3_BUCKET, S3_REGION y credenciales.');
+  console.error('STORAGE_DRIVER=s3 requiere el bucket (S3_BUCKET o AWS_BUCKET_NAME), la región y las credenciales.');
   process.exit(1);
 }
 

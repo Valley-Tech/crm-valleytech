@@ -51,6 +51,7 @@ export default function Settings() {
             <div className="small"><span className="muted">Cliente:</span> {user.tenant?.name} · <span className="muted">plan</span> {user.tenant?.plan}</div>
             <div className="small"><span className="muted">Usuario:</span> {user.name} ({user.email}) · rol {roleLabel(user.role)}</div>
             <div className="small"><span className="muted">URL pública:</span> <code>{config?.publicUrl}</code></div>
+            <div className="small"><span className="muted">Archivos (multimedia y conocimiento):</span> {config?.storage ?? '—'}{config?.storage?.startsWith('disco') ? <span className="tiny" style={{ color: 'var(--crit)' }}> · en Railway web y worker no comparten disco: configura S3</span> : null}</div>
             <div className="small"><span className="muted">Webhook de Meta:</span> <code>{config?.publicUrl}/webhooks/meta</code></div>
           </div>
           <div className="card pad col">

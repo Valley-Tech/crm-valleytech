@@ -28,19 +28,27 @@ async function getS3() {
   const { S3Client } = await loadS3Sdk();
   s3Client = new S3Client({
     region: env.S3_REGION || 'auto',
-    credentials: { accessKeyId: env.S3_ACCESS_KEY_ID, secretAccessKey: env.S3_SECRET_ACCESS_KEY },
+    // Sin credenciales explícitas, el SDK usa las de AWS_* del entorno o el rol de la máquina.
+    ...(env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
+      ? { credentials: { accessKeyId: env.S3_ACCESS_KEY_ID, secretAccessKey: env.S3_SECRET_ACCESS_KEY } }
+      : {}),
     // R2 / B2 / MinIO: endpoint propio y rutas por bucket.
     ...(env.S3_ENDPOINT ? { endpoint: env.S3_ENDPOINT, forcePathStyle: true } : {}),
   });
   return s3Client;
 }
 
+/** Clave real en el bucket: dentro de la carpeta del CRM (S3_PREFIX, por defecto "crm/"). */
+const s3Key = (key) => `${env.S3_PREFIX ?? ''}${key}`;
+
+export const storageInfo = () => ({ driver: env.STORAGE_DRIVER, bucket: env.STORAGE_DRIVER === 's3' ? env.S3_BUCKET : null, prefix: env.S3_PREFIX ?? '' });
+
 export async function putObject(key, buffer, contentType) {
   if (env.STORAGE_DRIVER === 's3') {
     const { PutObjectCommand } = await loadS3Sdk();
     const client = await getS3();
     await client.send(
-      new PutObjectCommand({ Bucket: env.S3_BUCKET, Key: key, Body: buffer, ContentType: contentType })
+      new PutObjectCommand({ Bucket: env.S3_BUCKET, Key: s3Key(key), Body: buffer, ContentType: contentType })
     );
     return key;
   }
@@ -56,13 +64,25 @@ export async function getObject(key) {
   if (env.STORAGE_DRIVER === 's3') {
     const { GetObjectCommand } = await loadS3Sdk();
     const client = await getS3();
-    const result = await client.send(new GetObjectCommand({ Bucket: env.S3_BUCKET, Key: key }));
+    const result = await client.send(new GetObjectCommand({ Bucket: env.S3_BUCKET, Key: s3Key(key) }));
     const chunks = [];
     for await (const chunk of result.Body) chunks.push(chunk);
     return Buffer.concat(chunks);
   }
 
-  return fs.readFile(path.resolve(env.STORAGE_LOCAL_DIR, key));
+  try {
+    return await fs.readFile(path.resolve(env.STORAGE_LOCAL_DIR, key));
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      // Causa típica en Railway: lo guardó el servicio web y lo busca el worker (discos distintos).
+      const e = new Error(
+        'El archivo no está en este servidor: con STORAGE_DRIVER=local cada servicio (web y worker) tiene su propio disco y se borra en cada despliegue. Configura el almacenamiento en S3 (AWS_BUCKET_NAME, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY en web y worker) y vuelve a subir el archivo.'
+      );
+      e.code = 'ENOENT';
+      throw e;
+    }
+    throw err;
+  }
 }
 
 /** Borra un archivo; nunca lanza (un archivo que ya no está no debe frenar un borrado). */
@@ -71,7 +91,7 @@ export async function deleteObject(key) {
     if (env.STORAGE_DRIVER === 's3') {
       const { DeleteObjectCommand } = await loadS3Sdk();
       const client = await getS3();
-      await client.send(new DeleteObjectCommand({ Bucket: env.S3_BUCKET, Key: key }));
+      await client.send(new DeleteObjectCommand({ Bucket: env.S3_BUCKET, Key: s3Key(key) }));
     } else {
       await fs.rm(path.resolve(env.STORAGE_LOCAL_DIR, key), { force: true });
     }
