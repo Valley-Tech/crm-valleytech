@@ -15,21 +15,44 @@ export function windowExpiresAt(conversation) {
   return new Date(new Date(conversation.lastInboundAt).getTime() + SERVICE_WINDOW_MS);
 }
 
-/** Un contacto tiene como mucho una conversación abierta por canal. */
+/**
+ * Un contacto tiene como mucho una conversación abierta por canal **y por
+ * número de WhatsApp**. Si el mismo cliente escribe a dos números (dos
+ * chatbots), cada número tiene su propio chat: así no se mezclan mensajes,
+ * historial de la IA, estado del bot ni pausas entre chatbots, y el dueño de
+ * un chatbot no ve lo que el cliente habló con otro.
+ *
+ * Sin `integrationId` (bots sin número asignado) se usa el chat abierto más
+ * reciente, como antes.
+ */
 export async function findOrCreateConversation({ tenantId, contactId, channel, integrationId }) {
-  const existing = await prisma.conversation.findFirst({
-    where: { tenantId, contactId, channel, status: { not: 'closed' } },
-    orderBy: { createdAt: 'desc' },
-  });
+  const open = { tenantId, contactId, channel, status: { not: 'closed' } };
 
-  if (existing) {
-    if (integrationId && existing.integrationId !== integrationId) {
-      return prisma.conversation.update({ where: { id: existing.id }, data: { integrationId } });
-    }
-    return existing;
+  if (integrationId) {
+    const own = await prisma.conversation.findFirst({ where: { ...open, integrationId }, orderBy: { lastMessageAt: 'desc' } });
+    if (own) return own;
+
+    // Chat antiguo sin número (creado antes de asignar números o cuyo número se eliminó): lo adopta.
+    const orphan = await prisma.conversation.findFirst({ where: { ...open, integrationId: null }, orderBy: { lastMessageAt: 'desc' } });
+    if (orphan) return prisma.conversation.update({ where: { id: orphan.id }, data: { integrationId } });
+
+    return prisma.conversation.create({ data: { tenantId, contactId, channel, integrationId } });
   }
 
-  return prisma.conversation.create({ data: { tenantId, contactId, channel, integrationId } });
+  const existing = await prisma.conversation.findFirst({ where: open, orderBy: { lastMessageAt: 'desc' } });
+  return existing ?? prisma.conversation.create({ data: { tenantId, contactId, channel, integrationId: null } });
+}
+
+/**
+ * Conversación abierta de un contacto para un número concreto (o la más
+ * reciente si no se conoce el número). No crea nada.
+ */
+export async function findOpenConversation({ tenantId, contactId, channel, integrationId }) {
+  const open = { tenantId, contactId, ...(channel ? { channel } : {}), status: { not: 'closed' } };
+  if (integrationId) {
+    return prisma.conversation.findFirst({ where: { ...open, integrationId }, orderBy: { lastMessageAt: 'desc' } });
+  }
+  return prisma.conversation.findFirst({ where: open, orderBy: { lastMessageAt: 'desc' } });
 }
 
 /** Actualiza los campos que la bandeja necesita para ordenar y previsualizar. */

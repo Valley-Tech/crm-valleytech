@@ -14,6 +14,7 @@ import { answer, conversationHistory, historyFromMessages, aiReadiness, READINES
 import env from '../../config/env.js';
 import {
   findOrCreateConversation,
+  findOpenConversation,
   pauseBot,
   shouldBotRespond,
   isWithinServiceWindow,
@@ -234,13 +235,10 @@ router.get(
     const waId = String(req.query.to ?? '').trim();
     if (!waId) throw badRequest('Indica ?to=<número en formato internacional sin +>');
 
+    // Solo el chat de ESTE número: el mismo cliente puede tener otro chat con otro chatbot.
+    const integrationId = await integrationForBot(req.bot, req.query.phoneNumberId ? String(req.query.phoneNumberId) : undefined);
     const contact = await prisma.contact.findUnique({ where: { tenantId_channel_waId: { tenantId, channel, waId } } });
-    const conversation = contact
-      ? await prisma.conversation.findFirst({
-          where: { tenantId, contactId: contact.id, status: { not: 'closed' } },
-          orderBy: { lastMessageAt: 'desc' },
-        })
-      : null;
+    const conversation = contact ? await findOpenConversation({ tenantId, contactId: contact.id, channel, integrationId }) : null;
 
     // Si la pausa caducó por inactividad, aquí se levanta (el bot en modo espejo consulta esto antes de responder).
     const botActive = conversation ? await shouldBotRespond(conversation) : true;
@@ -364,6 +362,7 @@ router.post(
       .object({
         conversationId: z.string().uuid().optional(),
         to: z.string().min(6).optional(),
+        phoneNumberId: z.string().optional(),
         text: z.string().trim().min(1).max(4000),
         history: z.array(z.object({ role: z.enum(['user', 'model']), text: z.string().max(4000) })).max(40).optional(),
         historyLimit: z.number().int().min(0).max(40).default(20),
@@ -380,11 +379,16 @@ router.post(
       history = historyFromMessages(input.history.map((h) => ({ direction: h.role === 'user' ? 'inbound' : 'outbound', text: h.text })), input.historyLimit);
     } else {
       let conversationId = input.conversationId ?? null;
-      if (!conversationId && input.to) {
-        const contact = await prisma.contact.findUnique({ where: { tenantId_channel_waId: { tenantId: req.bot.tenantId, channel: req.bot.channel, waId: input.to } } });
-        const conversation = contact
-          ? await prisma.conversation.findFirst({ where: { tenantId: req.bot.tenantId, contactId: contact.id }, orderBy: { lastMessageAt: 'desc' } })
-          : null;
+      if (conversationId) {
+        const own = await prisma.conversation.findFirst({ where: { id: conversationId, tenantId: req.bot.tenantId }, select: { id: true } });
+        if (!own) throw notFound('Conversación no encontrada');
+      } else if (input.to) {
+        // Historial SOLO del chat de este número: lo que el cliente habló con otro chatbot
+        // (otro número) no debe influir en la respuesta ni filtrarse entre negocios.
+        const { tenantId, channel } = req.bot;
+        const integrationId = await integrationForBot(req.bot, input.phoneNumberId);
+        const contact = await prisma.contact.findUnique({ where: { tenantId_channel_waId: { tenantId, channel, waId: input.to } } });
+        const conversation = contact ? await findOpenConversation({ tenantId, contactId: contact.id, channel, integrationId }) : null;
         conversationId = conversation?.id ?? null;
       }
       if (conversationId && input.historyLimit > 0) history = await conversationHistory(conversationId, input.historyLimit);

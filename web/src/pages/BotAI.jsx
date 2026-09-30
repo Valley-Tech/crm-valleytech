@@ -343,7 +343,7 @@ function Playground({ botId, disabled }) {
     setBusy(true);
     try {
       const r = await post(`/api/bots/${botId}/ai/test`, { message: text, history });
-      setMsgs((m) => [...m, { role: 'model', text: r.text, meta: `${r.model} · ${r.ms} ms${r.usedKnowledge ? ' · con conocimiento' : ''}${r.sources?.length ? ` · fuentes: ${r.sources.length}` : ''}` }]);
+      setMsgs((m) => [...m, { role: 'model', text: r.text, meta: `${r.model} · ${r.ms} ms${r.usedKnowledge ? ' · con conocimiento' : ''}${r.sources?.length ? ` · fuentes: ${r.sources.length}` : ''}${r.finishReason && r.finishReason !== 'STOP' ? ` · ⚠ respuesta incompleta (${r.finishReason})` : ''}` }]);
     } catch (err) {
       toast(err.message, { error: true });
       setMsgs((m) => [...m, { role: 'model', text: `⚠️ ${err.message}`, error: true }]);

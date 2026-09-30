@@ -78,30 +78,82 @@ export async function generate({
   let lastError = null;
 
   for (const name of candidates) {
-    const body = {
-      contents,
-      ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
-      ...(tools?.length ? { tools } : {}),
-      generationConfig: { temperature: 0.4, maxOutputTokens: 1024, ...generationConfig },
-    };
-    try {
-      const { data } = await call('POST', `${API}/models/${name}:generateContent`, { key, data: body, timeout });
-      const candidate = data.candidates?.[0];
-      const text = (candidate?.content?.parts ?? []).map((p) => p.text ?? '').join('').trim();
-      const grounding = candidate?.groundingMetadata ?? null;
-      const sources = [...new Set((grounding?.groundingChunks ?? []).map((c) => c.retrievedContext?.title ?? c.web?.title).filter(Boolean))];
-      return { text, model: name, finishReason: candidate?.finishReason, sources, raw: data };
-    } catch (err) {
-      lastError = err;
-      // 404 = ese modelo no existe (todavía / ya no) para esta cuenta: probar el siguiente.
-      if (err.status === 404 || /not found|not supported/i.test(err.message)) {
-        logger.warn({ model: name, err: err.message }, 'Modelo de Gemini no disponible, probando el siguiente');
-        continue;
+    const config = { temperature: 0.4, maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS, ...generationConfig };
+    const thinking = thinkingConfigFor(name);
+    let withThinking = Boolean(thinking) && !('thinkingConfig' in config);
+    let attempts = 0;
+
+    while (attempts < 3) {
+      attempts += 1;
+      const body = {
+        contents,
+        ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
+        ...(tools?.length ? { tools } : {}),
+        generationConfig: withThinking ? { ...config, thinkingConfig: thinking } : config,
+      };
+      try {
+        const { data } = await call('POST', `${API}/models/${name}:generateContent`, { key, data: body, timeout });
+        const candidate = data.candidates?.[0];
+        const text = extractText(candidate);
+        const grounding = candidate?.groundingMetadata ?? null;
+        const sources = [...new Set((grounding?.groundingChunks ?? []).map((c) => c.retrievedContext?.title ?? c.web?.title).filter(Boolean))];
+        const finishReason = candidate?.finishReason;
+
+        // Se acabó el presupuesto de salida (en modelos con razonamiento, el "pensamiento"
+        // también cuenta): la respuesta llega cortada a mitad de frase. Se reintenta con más.
+        if (finishReason === 'MAX_TOKENS' && attempts < 3 && (config.maxOutputTokens ?? 0) < MAX_OUTPUT_TOKENS_CAP) {
+          logger.warn({ model: name, maxOutputTokens: config.maxOutputTokens, usage: data.usageMetadata }, 'Respuesta de Gemini cortada (MAX_TOKENS); se reintenta con más tokens');
+          config.maxOutputTokens = Math.min(MAX_OUTPUT_TOKENS_CAP, (config.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS) * 2);
+          continue;
+        }
+        if (finishReason && !['STOP', 'MAX_TOKENS'].includes(finishReason)) {
+          logger.warn({ model: name, finishReason, usage: data.usageMetadata }, 'Gemini terminó la respuesta por un motivo inesperado');
+        }
+        return { text, model: name, finishReason, sources, usage: data.usageMetadata ?? null, raw: data };
+      } catch (err) {
+        lastError = err;
+        // 404 = ese modelo no existe (todavía / ya no) para esta cuenta: probar el siguiente.
+        if (err.status === 404 || /not found|not supported/i.test(err.message)) {
+          logger.warn({ model: name, err: err.message }, 'Modelo de Gemini no disponible, probando el siguiente');
+          break;
+        }
+        // El modelo no acepta ese ajuste de razonamiento: se repite sin él.
+        if (withThinking && err.status === 400 && /thinking/i.test(err.message)) {
+          logger.warn({ model: name, err: err.message }, 'El modelo no admite thinkingConfig; se reintenta sin él');
+          withThinking = false;
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
   }
   throw lastError ?? new GeminiError('Ningún modelo de Gemini disponible');
+}
+
+/** Tope por defecto y máximo de tokens de salida (incluye el razonamiento del modelo). */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+export const MAX_OUTPUT_TOKENS_CAP = 16384;
+
+/**
+ * Razonamiento mínimo para atención al cliente: las respuestas son cortas y
+ * salen de la base de conocimiento, y el "pensamiento" se cobra como salida.
+ * Gemini 2.5 usa thinkingBudget (0 = sin razonamiento); Gemini 3+ usa thinkingLevel.
+ */
+export function thinkingConfigFor(model = '') {
+  const m = String(model).toLowerCase();
+  if (!m.startsWith('gemini-')) return null;
+  if (/^gemini-2\.5/.test(m)) return { thinkingBudget: 0 };
+  if (/^gemini-[3-9]/.test(m)) return { thinkingLevel: 'low' };
+  return null;
+}
+
+/** Texto de la respuesta sin las partes de razonamiento (thought) ni llamadas a herramientas. */
+export function extractText(candidate) {
+  return (candidate?.content?.parts ?? [])
+    .filter((p) => !p.thought && typeof p.text === 'string')
+    .map((p) => p.text)
+    .join('')
+    .trim();
 }
 
 /** Describe una imagen (OCR + descripción) para poder indexarla como texto. */
@@ -114,7 +166,7 @@ export async function describeImage({ buffer, mimeType, name = 'imagen', key, mo
     model,
     key,
     contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType, data: buffer.toString('base64') } }] }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
+    generationConfig: { temperature: 0.2, maxOutputTokens: 8192 },
     timeout: 90000,
   });
   return text;

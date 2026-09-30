@@ -106,6 +106,28 @@ export async function recordSent(to, data, metaResponse) {
   }
 }
 
+/**
+ * Pide al CRM la respuesta de la IA (instrucciones, preguntas frecuentes,
+ * archivos y sitio web administrados en Chatbots → IA y conocimiento, más el
+ * historial del chat guardado en el CRM). Devuelve el texto o null si la IA
+ * está apagada en el CRM / no responde, para que el bot use su propio Gemini.
+ */
+export async function askAi(to, text) {
+  if (!crmEnabled) return null;
+  try {
+    const { data } = await crm.post('/ai/reply', { to, text, phoneNumberId: CRM_PHONE_NUMBER_ID }, { timeout: 45000 });
+    return data?.text ?? null;
+  } catch (error) {
+    const code = error.response?.data?.error?.code ?? error.response?.data?.code;
+    if (error.response?.status === 409 && ['ai_disabled', 'ai_no_knowledge', 'ai_not_configured'].includes(code)) {
+      console.log(`[crm] IA no disponible para este chatbot (${code})`);
+      return null;
+    }
+    console.warn('[crm] la IA del CRM no respondió:', describe(error));
+    return null;
+  }
+}
+
 // Caché corta para no preguntar al CRM en cada uno de los 5 mensajes de un menú.
 const activeCache = new Map();
 /** ¿Sigue activo el bot en la conversación con este número? (true si el CRM no responde). */
@@ -114,7 +136,7 @@ export async function canBotReply(to) {
   const cached = activeCache.get(to);
   if (cached && Date.now() - cached.at < 10_000) return cached.active;
   try {
-    const { data } = await crm.get('/conversations/lookup', { params: { to } });
+    const { data } = await crm.get('/conversations/lookup', { params: { to, phoneNumberId: CRM_PHONE_NUMBER_ID } });
     activeCache.set(to, { active: data.botActive !== false, at: Date.now() });
     return data.botActive !== false;
   } catch (error) {

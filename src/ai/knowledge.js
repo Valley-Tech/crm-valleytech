@@ -352,7 +352,9 @@ async function answerWithGemini({ bot, text, history = [] }) {
     systemInstruction: buildSystemInstruction(bot, faqs),
     contents,
     tools,
-    generationConfig: { temperature: bot.aiTemperature ?? 0.4, maxOutputTokens: 1024 },
+    // Sin maxOutputTokens bajo: en modelos con razonamiento el "pensamiento" también
+    // consume ese tope y la respuesta salía cortada a mitad de frase.
+    generationConfig: { temperature: bot.aiTemperature ?? 0.4 },
   });
 
   const clean = toWhatsAppText(result.text, bot.aiMaxChars ?? 600) || 'Disculpa, no pude generar una respuesta en este momento. ¿Me lo repites de otra forma?';
@@ -362,6 +364,8 @@ async function answerWithGemini({ bot, text, history = [] }) {
     model: result.model,
     sources: result.sources,
     usedKnowledge: tools.length > 0,
+    finishReason: result.finishReason ?? null,
+    usage: result.usage ?? null,
     ms: Date.now() - started,
   };
 }
@@ -476,7 +480,7 @@ async function answerWithClaude({ bot, text, history = [] }) {
     system,
     messages,
     temperature: bot.aiTemperature ?? 0.4,
-    maxTokens: 1024,
+    maxTokens: 2048,
   });
 
   const clean = toWhatsAppText(result.text, bot.aiMaxChars ?? 600) || 'Disculpa, no pude generar una respuesta en este momento. ¿Me lo repites de otra forma?';
