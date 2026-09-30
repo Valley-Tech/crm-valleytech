@@ -7,34 +7,49 @@ import logger from '../lib/logger.js';
  * Almacenamiento de multimedia con dos controladores.
  *
  * Por defecto escribe en disco para que el CRM funcione en tu computador sin
- * credenciales de AWS. Con STORAGE_DRIVER=s3 usa S3/R2; el SDK se importa de
- * forma diferida para no exigirlo en instalaciones que no lo usan.
+ * credenciales de AWS. Con S3 (AWS_BUCKET_NAME…) usa el bucket, sin SDK.
  */
+
+import { S3Lite } from './s3lite.js';
 
 let s3Client = null;
 
-async function loadS3Sdk() {
-  try {
-    return await import('@aws-sdk/client-s3');
-  } catch {
-    throw new Error(
-      'STORAGE_DRIVER=s3 requiere el SDK de AWS. Instálalo con: npm install @aws-sdk/client-s3'
-    );
-  }
-}
-
+/**
+ * Cliente S3. Sin dependencias: usa el cliente propio (firma SigV4 sobre
+ * HTTPS). Si el proyecto tiene instalado @aws-sdk/client-s3 se usa el SDK,
+ * pero no hace falta (evita regenerar el package-lock en cada despliegue).
+ */
 async function getS3() {
   if (s3Client) return s3Client;
-  const { S3Client } = await loadS3Sdk();
-  s3Client = new S3Client({
-    region: env.S3_REGION || 'auto',
-    // Sin credenciales explícitas, el SDK usa las de AWS_* del entorno o el rol de la máquina.
-    ...(env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
-      ? { credentials: { accessKeyId: env.S3_ACCESS_KEY_ID, secretAccessKey: env.S3_SECRET_ACCESS_KEY } }
-      : {}),
-    // R2 / B2 / MinIO: endpoint propio y rutas por bucket.
-    ...(env.S3_ENDPOINT ? { endpoint: env.S3_ENDPOINT, forcePathStyle: true } : {}),
-  });
+  const config = {
+    bucket: env.S3_BUCKET,
+    region: env.S3_REGION || 'us-east-1',
+    accessKeyId: env.S3_ACCESS_KEY_ID,
+    secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+    endpoint: env.S3_ENDPOINT || '',
+  };
+  try {
+    const sdk = await import('@aws-sdk/client-s3');
+    const client = new sdk.S3Client({
+      region: config.region,
+      credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey },
+      ...(config.endpoint ? { endpoint: config.endpoint, forcePathStyle: true } : {}),
+    });
+    s3Client = {
+      put: async (key, body, contentType) => { await client.send(new sdk.PutObjectCommand({ Bucket: config.bucket, Key: key, Body: body, ContentType: contentType })); return key; },
+      get: async (key) => {
+        const result = await client.send(new sdk.GetObjectCommand({ Bucket: config.bucket, Key: key }));
+        const chunks = [];
+        for await (const chunk of result.Body) chunks.push(chunk);
+        return Buffer.concat(chunks);
+      },
+      delete: async (key) => { await client.send(new sdk.DeleteObjectCommand({ Bucket: config.bucket, Key: key })); return true; },
+    };
+    logger.info({ bucket: config.bucket }, 'Almacenamiento S3 con el SDK de AWS');
+  } catch {
+    s3Client = new S3Lite(config);
+    logger.info({ bucket: config.bucket, prefix: env.S3_PREFIX }, 'Almacenamiento S3 (cliente integrado, sin SDK)');
+  }
   return s3Client;
 }
 
@@ -45,11 +60,8 @@ export const storageInfo = () => ({ driver: env.STORAGE_DRIVER, bucket: env.STOR
 
 export async function putObject(key, buffer, contentType) {
   if (env.STORAGE_DRIVER === 's3') {
-    const { PutObjectCommand } = await loadS3Sdk();
     const client = await getS3();
-    await client.send(
-      new PutObjectCommand({ Bucket: env.S3_BUCKET, Key: s3Key(key), Body: buffer, ContentType: contentType })
-    );
+    await client.put(s3Key(key), buffer, contentType);
     return key;
   }
 
@@ -62,12 +74,8 @@ export async function putObject(key, buffer, contentType) {
 
 export async function getObject(key) {
   if (env.STORAGE_DRIVER === 's3') {
-    const { GetObjectCommand } = await loadS3Sdk();
     const client = await getS3();
-    const result = await client.send(new GetObjectCommand({ Bucket: env.S3_BUCKET, Key: s3Key(key) }));
-    const chunks = [];
-    for await (const chunk of result.Body) chunks.push(chunk);
-    return Buffer.concat(chunks);
+    return client.get(s3Key(key));
   }
 
   try {
@@ -89,9 +97,8 @@ export async function getObject(key) {
 export async function deleteObject(key) {
   try {
     if (env.STORAGE_DRIVER === 's3') {
-      const { DeleteObjectCommand } = await loadS3Sdk();
       const client = await getS3();
-      await client.send(new DeleteObjectCommand({ Bucket: env.S3_BUCKET, Key: s3Key(key) }));
+      await client.delete(s3Key(key));
     } else {
       await fs.rm(path.resolve(env.STORAGE_LOCAL_DIR, key), { force: true });
     }
