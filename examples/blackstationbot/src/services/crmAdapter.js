@@ -130,6 +130,31 @@ export async function askAi(to, text) {
   }
 }
 
+/**
+ * Búsqueda de productos por IA (reemplaza al diccionario product_names que
+ * vivía en geminiService.js). Manda lo que escribió el cliente y recibe los
+ * productos de la lista cargada en el CRM (Chatbots → IA y conocimiento →
+ * Catálogo de productos) con sus IDs reales:
+ *   { items: [{ id, name, price, category }], none, text }
+ * `id` es el product_retailer_id del catálogo de WhatsApp → sendSingleProduct(to, id).
+ * Devuelve null si la IA está apagada, no hay lista o el CRM no respondió.
+ */
+export async function searchProducts(to, text, { limit = 10 } = {}) {
+  if (!crmEnabled) return null;
+  try {
+    const { data } = await crm.post('/ai/products/search', { to, text, limit, phoneNumberId: CRM_PHONE_NUMBER_ID }, { timeout: 45000 });
+    return data ?? null;
+  } catch (error) {
+    const code = error.response?.data?.error?.code ?? error.response?.data?.code;
+    if (error.response?.status === 409 && ['ai_disabled', 'ai_no_products', 'ai_not_configured'].includes(code)) {
+      console.log(`[crm] búsqueda de productos no disponible (${code})`);
+      return null;
+    }
+    console.warn('[crm] la búsqueda de productos del CRM no respondió:', describe(error));
+    return null;
+  }
+}
+
 // Caché corta para no preguntar al CRM en cada uno de los 5 mensajes de un menú.
 const activeCache = new Map();
 /** ¿Sigue activo el bot en la conversación con este número? (true si el CRM no responde). */

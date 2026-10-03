@@ -13,6 +13,7 @@ import {
   IMAGE_MIME,
   mimeFromName,
 } from './gemini.js';
+import { productsMarkdown } from './products.js';
 import { crawlSite, fetchPage, htmlToText, titleOf, fetchShopifyProducts, shopifyCatalogMarkdown } from './web.js';
 import { generate as claudeGenerate, pdfBlock, imageBlock, textDocumentBlock, CACHE_1H, CLAUDE_MODELS } from './claude.js';
 
@@ -174,6 +175,38 @@ async function indexSite(source, store) {
   };
 }
 
+/** Catálogo de productos: la lista va en `content` (JSON) y se indexa también como texto. */
+async function indexProducts(source, store) {
+  const products = parseStoredProducts(source);
+  if (!products.length) throw new Error('La lista de productos está vacía o no se pudo leer (usa CSV con columnas id y nombre, JSON o líneas "id | nombre").');
+  const markdown = productsMarkdown(products, source.name);
+  const { documentName } = await maybeUpload(store, {
+    buffer: Buffer.from(markdown, 'utf8'),
+    mimeType: 'text/markdown',
+    displayName: docName(source),
+    metadata: { kind: 'products', name: source.name },
+  });
+  return { documentName, extractedText: markdown.slice(0, MAX_EXTRACTED_CHARS), pages: products.length };
+}
+
+/** Lee la lista guardada en `content` (JSON) sin fallar con datos viejos. */
+export function parseStoredProducts(source) {
+  try {
+    const data = JSON.parse(source?.content ?? '[]');
+    return Array.isArray(data) ? data.filter((p) => p && p.id && p.name) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Todos los productos listos de un bot (de todas sus listas). */
+export async function loadProducts(botId) {
+  const sources = await prisma.knowledgeSource.findMany({ where: { botId, kind: 'products', status: 'ready' }, orderBy: { createdAt: 'asc' } });
+  const byId = new Map();
+  for (const s of sources) for (const p of parseStoredProducts(s)) byId.set(p.id, p);
+  return [...byId.values()];
+}
+
 async function indexText(source, store) {
   const [q, a] = String(source.content ?? '').split('\n---\n');
   const markdown = source.kind === 'faq' ? `# Pregunta frecuente\n\n**Pregunta:** ${q}\n\n**Respuesta:** ${a ?? ''}` : `# ${source.name}\n\n${source.content ?? ''}`;
@@ -203,6 +236,7 @@ export async function indexSource(sourceId) {
       case 'site': result = await indexSite(source, store); break;
       case 'faq':
       case 'text': result = await indexText(source, store); break;
+      case 'products': result = await indexProducts(source, store); break;
       default: throw new Error(`Tipo de fuente desconocido: ${source.kind}`);
     }
 
@@ -302,7 +336,7 @@ export function historyFromMessages(messages = [], limit = 20) {
   return merged.map((m) => ({ role: m.role, parts: [{ text: m.text.slice(0, 4000) }] }));
 }
 
-const KNOWLEDGE_KINDS = ['file', 'url', 'site', 'text', 'faq'];
+const KNOWLEDGE_KINDS = ['file', 'url', 'site', 'text', 'faq', 'products'];
 
 /**
  * ¿Puede responder la IA de este bot? Solo si está activa, tiene al menos una
@@ -340,7 +374,7 @@ async function answerWithGemini({ bot, text, history = [] }) {
 
   const [faqs, readyDocs] = await Promise.all([
     prisma.knowledgeSource.findMany({ where: { botId: bot.id, kind: 'faq', status: 'ready' }, orderBy: { createdAt: 'asc' } }),
-    prisma.knowledgeSource.count({ where: { botId: bot.id, status: 'ready', kind: { in: ['file', 'url', 'site', 'text'] } } }),
+    prisma.knowledgeSource.count({ where: { botId: bot.id, status: 'ready', kind: { in: ['file', 'url', 'site', 'text', 'products'] } } }),
   ]);
 
   const tools = readyDocs > 0 && bot.fileSearchStore ? fileSearchTool(bot.fileSearchStore) : [];
@@ -400,7 +434,7 @@ export async function buildClaudeKnowledge(bot) {
   };
 
   // Primero lo más "denso": FAQ y textos; luego sitios; al final archivos.
-  const order = { faq: 0, text: 1, site: 2, url: 3, file: 4 };
+  const order = { faq: 0, products: 1, text: 2, site: 3, url: 4, file: 5 };
   for (const source of [...sources].sort((a, b) => order[a.kind] - order[b.kind])) {
     if (source.kind === 'faq') {
       const [q, a] = String(source.content ?? '').split('\n---\n');

@@ -10,7 +10,8 @@ import { recordUsage } from '../../services/usage.js';
 import { publishEvent } from '../../realtime/events.js';
 import { inboundQueue } from '../../queues/index.js';
 import logger from '../../lib/logger.js';
-import { answer, conversationHistory, historyFromMessages, aiReadiness, READINESS_MESSAGES } from '../../ai/knowledge.js';
+import { answer, conversationHistory, historyFromMessages, aiReadiness, READINESS_MESSAGES, loadProducts } from '../../ai/knowledge.js';
+import { searchProducts, productsText } from '../../ai/products.js';
 import env from '../../config/env.js';
 import {
   findOrCreateConversation,
@@ -399,6 +400,47 @@ router.post(
 
     const result = await answer({ bot, text: input.text, history });
     res.json(result);
+  })
+);
+
+/**
+ * Búsqueda de productos por IA (MerkCentro24 y similares). El bot manda lo que
+ * escribió el cliente y recibe los productos de la lista cargada en el CRM con
+ * sus IDs reales (product_retailer_id), listos para enviar el producto del
+ * catálogo o armar el pedido. 409 si la IA está apagada o no hay lista.
+ */
+router.post(
+  '/ai/products/search',
+  asyncHandler(async (req, res) => {
+    const input = z
+      .object({
+        text: z.string().trim().min(1).max(500),
+        to: z.string().min(6).optional(),
+        phoneNumberId: z.string().optional(),
+        limit: z.number().int().min(1).max(30).default(10),
+      })
+      .parse(req.body);
+
+    const bot = await prisma.botIntegration.findUnique({ where: { id: req.bot.id } });
+    const provider = bot.aiProvider === 'claude' ? 'claude' : 'gemini';
+    const configured = provider === 'claude' ? Boolean(env.ANTHROPIC_API_KEY) : Boolean(env.GEMINI_API_KEY);
+    if (!configured) throw conflict('ai_not_configured', READINESS_MESSAGES.ai_not_configured);
+    if (!bot.aiEnabled) throw conflict('ai_disabled', READINESS_MESSAGES.ai_disabled);
+    const products = await loadProducts(bot.id);
+    if (!products.length) throw conflict('ai_no_products', 'Este chatbot no tiene una lista de productos lista en el CRM (Chatbots → IA y conocimiento → Catálogo de productos).');
+
+    const result = await searchProducts({ bot, products, text: input.text, limit: input.limit });
+    res.json({
+      items: result.items,
+      none: result.none,
+      text: productsText(result.items, { none: result.none }),
+      provider: result.provider,
+      model: result.model,
+      candidates: result.candidates,
+      total: products.length,
+      fallback: Boolean(result.fallback),
+      ms: result.ms,
+    });
   })
 );
 

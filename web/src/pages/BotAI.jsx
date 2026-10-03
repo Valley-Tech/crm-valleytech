@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { get, post, patch, del, api } from '../api.js';
+import { get, post, patch, del, api, tokenStore } from '../api.js';
 import { useRouter } from '../router.jsx';
 import { useToast } from '../store.jsx';
 import { Badge, Button, Empty, Field, Loading, Modal, Switch, Confirm, fmtDateTime } from '../components/ui.jsx';
@@ -17,7 +17,7 @@ const STATUS = {
   ready: { label: 'listo', tone: 'ok' },
   error: { label: 'error', tone: 'crit' },
 };
-const KIND = { file: 'Archivo', url: 'Página', site: 'Sitio web', faq: 'Pregunta frecuente', text: 'Texto' };
+const KIND = { file: 'Archivo', url: 'Página', site: 'Sitio web', faq: 'Pregunta frecuente', text: 'Texto', products: 'Catálogo de productos' };
 const ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json,.html,.htm,.xml,.rtf,.jpg,.jpeg,.png,.webp,.gif';
 
 const fmtBytes = (n) => (!n ? '' : n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
@@ -172,6 +172,13 @@ export default function BotAI({ params }) {
         <SourceList items={byKind('text')} onDelete={setConfirm} onReindex={(s) => post(`/api/bots/${botId}/knowledge/${s.id}/reindex`).then(load)} empty="Sin textos todavía." />
       </Section>
 
+      {/* ---------------------------------------------------------- Catálogo de productos */}
+      <Section done={byKind('products').some((s) => s.status === 'ready')} title="Catálogo de productos (búsqueda por IA)" hint="Para bots que buscan productos por lo que escribe el cliente (MerkCentro24). Pega o sube la lista con id y nombre (precio y categoría opcionales); el bot recibe los IDs reales para enviar el producto del catálogo de WhatsApp. Reemplaza al product_names que estaba en el código del bot." optional>
+        <ProductsForm botId={botId} existing={byKind('products')} onAdded={load} />
+        <SourceList items={byKind('products')} onDelete={setConfirm} onReindex={(s) => post(`/api/bots/${botId}/knowledge/${s.id}/reindex`).then(load)} empty="Sin lista de productos todavía." botId={botId} />
+        {byKind('products').some((s) => s.status === 'ready') ? <ProductSearchTest botId={botId} /> : null}
+      </Section>
+
       {/* ---------------------------------------------------------- Probar */}
       <Section done={false} title="Probar la IA" hint="Conversa aquí como si fueras un cliente. No se envía nada por WhatsApp." optional>
         <Playground botId={botId} disabled={!ai.geminiConfigured} />
@@ -202,7 +209,7 @@ function Section({ title, hint, done, optional = false, children }) {
   );
 }
 
-function SourceList({ items, onDelete, onReindex, empty }) {
+function SourceList({ items, onDelete, onReindex, empty, botId }) {
   if (!items.length) return <span className="small faint">{empty}</span>;
   return (
     <div className="kb-list">
@@ -219,6 +226,7 @@ function SourceList({ items, onDelete, onReindex, empty }) {
                 {KIND[s.kind]}
                 {s.sizeBytes ? ` · ${fmtBytes(s.sizeBytes)}` : ''}
                 {s.kind === 'site' && s.status === 'ready' ? ` · ${s.pages} página${s.pages === 1 ? '' : 's'}${s.catalog ? ' + catálogo Shopify' : ''}` : ''}
+                {s.kind === 'products' ? ` · ${s.products} producto${s.products === 1 ? '' : 's'}` : ''}
                 {s.sourceUrl ? ` · ${s.sourceUrl}` : ''}
                 {s.indexedAt ? ` · ${fmtDateTime(s.indexedAt)}` : ''}
               </div>
@@ -226,6 +234,7 @@ function SourceList({ items, onDelete, onReindex, empty }) {
               {s.status === 'error' ? <div className="small" style={{ color: 'var(--crit)', marginTop: 4 }}>{s.error}</div> : null}
             </div>
             <span className="row" style={{ gap: 6, flex: 'none' }}>
+              {s.kind === 'products' && botId ? <Button size="sm" onClick={() => downloadCsv(botId, s)} title="Descargar la lista como CSV">CSV</Button> : null}
               {s.status === 'error' || s.status === 'ready' ? <Button size="sm" onClick={() => onReindex(s)} title="Volver a indexar"><I.refresh /></Button> : <span className="spinner" />}
               <Button size="sm" variant="danger" onClick={() => onDelete(s)} title="Eliminar"><I.trash /></Button>
             </span>
@@ -322,6 +331,92 @@ function TextForm({ botId, onAdded }) {
       <textarea className="textarea" rows={4} placeholder="Texto" value={content} onChange={(e) => setContent(e.target.value)} required minLength={10} />
       <div className="row end"><Button type="submit" loading={busy}><I.plus /> Agregar texto</Button></div>
     </form>
+  );
+}
+
+async function downloadCsv(botId, source) {
+  const res = await fetch(`/api/bots/${botId}/knowledge/${source.id}/products?format=csv`, { headers: { Authorization: `Bearer ${tokenStore.get() ?? ''}` } });
+  if (!res.ok) return;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${source.name}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function ProductsForm({ botId, existing, onAdded }) {
+  const toast = useToast();
+  const ref = useRef(null);
+  const [name, setName] = useState('Catálogo de productos');
+  const [text, setText] = useState('');
+  const [replace, setReplace] = useState(existing[0]?.id ?? '');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (!existing.some((s) => s.id === replace)) setReplace(existing[0]?.id ?? ''); }, [existing]);
+
+  async function pick(file) {
+    if (!file) return;
+    try { setText(await file.text()); if (!name.trim() || name === 'Catálogo de productos') setName(file.name.replace(/\.[^.]+$/, '')); } catch (err) { toast(err.message, { error: true }); }
+    if (ref.current) ref.current.value = '';
+  }
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await post(`/api/bots/${botId}/knowledge/products`, { name: name.trim(), text, ...(replace ? { sourceId: replace } : {}) });
+      toast(`${r.products} producto${r.products === 1 ? '' : 's'} en cola de indexación`);
+      setText('');
+      onAdded();
+    } catch (err) { toast(err.message, { error: true }); } finally { setBusy(false); }
+  }
+  return (
+    <form className="col" style={{ gap: 8 }} onSubmit={submit} id="products-form">
+      <div className="row wrap" style={{ gap: 8 }}>
+        <input className="input" placeholder="Nombre de la lista" value={name} onChange={(e) => setName(e.target.value)} required minLength={2} style={{ flex: 1, minWidth: 200 }} />
+        <input ref={ref} type="file" hidden accept=".csv,.tsv,.txt,.json,.js" onChange={(e) => pick(e.target.files?.[0])} />
+        <Button type="button" onClick={() => ref.current?.click()}><I.clip /> Subir CSV / JSON / TXT</Button>
+      </div>
+      <textarea className="textarea mono" rows={6} placeholder={'Pega la lista. Formatos:\nid,nombre,precio,categoria   (CSV con cabecera)\n69d5082a9bf0d32ae9a89dd9 | 7 Cereales x 60gr | 3500 | Despensa\n"69d5082a9bf0d32ae9a89dd9": "7 Cereales x 60gr",   (diccionario del bot antiguo)'} value={text} onChange={(e) => setText(e.target.value)} required />
+      <div className="row wrap between" style={{ gap: 8 }}>
+        {existing.length ? (
+          <select className="select" value={replace} onChange={(e) => setReplace(e.target.value)} title="Reemplazar una lista existente o crear otra">
+            {existing.map((s) => <option key={s.id} value={s.id}>Reemplazar "{s.name}"</option>)}
+            <option value="">Crear otra lista</option>
+          </select>
+        ) : <span />}
+        <Button type="submit" loading={busy} disabled={!text.trim()}><I.plus /> {replace ? 'Reemplazar lista' : 'Cargar lista'}</Button>
+      </div>
+    </form>
+  );
+}
+
+function ProductSearchTest({ botId }) {
+  const toast = useToast();
+  const [q, setQ] = useState('');
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  async function submit(e) {
+    e.preventDefault();
+    if (!q.trim()) return;
+    setBusy(true);
+    try { setResult(await post(`/api/bots/${botId}/ai/products/test`, { message: q.trim() })); } catch (err) { toast(err.message, { error: true }); setResult(null); } finally { setBusy(false); }
+  }
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <form className="row" style={{ gap: 8 }} onSubmit={submit}>
+        <input className="input" placeholder='Probar la búsqueda: "quiero una gaseosa postobón"' value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1 }} id="products-test" />
+        <Button type="submit" loading={busy} disabled={!q.trim()}><I.search /> Buscar</Button>
+      </form>
+      {result ? (
+        <div className="callout small" id="products-result">
+          <div style={{ whiteSpace: 'pre-wrap' }}>{result.text}</div>
+          <div className="tiny faint" style={{ marginTop: 6 }}>
+            {result.items.map((p) => `${p.name} → ${p.id}`).join(' · ')}
+            {result.items.length ? ' · ' : ''}{result.model ?? 'sin IA'} · {result.candidates} de {result.total} candidatos · {result.ms} ms{result.fallback ? ' · ⚠ la IA falló, coincidencia por palabras' : ''}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

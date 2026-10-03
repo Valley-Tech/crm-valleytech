@@ -9,7 +9,8 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 import { recordAudit } from '../../services/audit.js';
 import { putObject } from '../../storage/index.js';
 import { knowledgeQueue } from '../../queues/index.js';
-import { MAX_FILE_BYTES, removeSource, answer, historyFromMessages, aiReadiness, READINESS_MESSAGES, AI_PROVIDERS, CLAUDE_MODELS } from '../../ai/knowledge.js';
+import { MAX_FILE_BYTES, removeSource, answer, historyFromMessages, aiReadiness, READINESS_MESSAGES, AI_PROVIDERS, CLAUDE_MODELS, parseStoredProducts, loadProducts } from '../../ai/knowledge.js';
+import { parseProducts, searchProducts, productsText, MAX_PRODUCTS } from '../../ai/products.js';
 import { NATIVE_MIME, IMAGE_MIME, MODEL_FALLBACKS, mimeFromName } from '../../ai/gemini.js';
 
 /**
@@ -76,6 +77,7 @@ function serializeSource(s) {
     sizeBytes: s.sizeBytes,
     sourceUrl: s.sourceUrl,
     content: s.kind === 'faq' || s.kind === 'text' ? s.content : undefined,
+    products: s.kind === 'products' ? parseStoredProducts(s).length : undefined,
     pages: s.pages,
     documents: list.length,
     catalog: Boolean(s.documents?.catalog),
@@ -245,6 +247,67 @@ router.post(
     });
     await enqueue(source.id);
     res.status(201).json(serializeSource(source));
+  })
+);
+
+/**
+ * Catálogo de productos para búsqueda por IA: se pega o sube la lista (CSV con
+ * columnas id y nombre [precio, categoría], JSON, líneas "id | nombre" o el
+ * diccionario JS antiguo). Reemplaza al product_names quemado en el bot.
+ */
+router.post(
+  '/bots/:id/knowledge/products',
+  asyncHandler(async (req, res) => {
+    const bot = await loadBot(req);
+    const input = z.object({ name: z.string().trim().min(2).max(160).default('Catálogo de productos'), text: z.string().min(3).max(4_000_000), sourceId: z.string().uuid().optional() }).parse(req.body);
+    const products = parseProducts(input.text);
+    if (!products.length) throw badRequest('No se encontraron productos. Usa CSV con columnas "id" y "nombre" (y opcionalmente "precio", "categoria"), JSON, o una línea por producto: id | nombre | precio.');
+    if (products.length >= MAX_PRODUCTS) throw badRequest(`La lista admite hasta ${MAX_PRODUCTS} productos.`);
+
+    const data = { name: input.name, content: JSON.stringify(products), pages: products.length, status: 'pending', error: null };
+    let source;
+    if (input.sourceId) {
+      const existing = await prisma.knowledgeSource.findFirst({ where: { id: input.sourceId, botId: bot.id, kind: 'products' } });
+      if (!existing) throw notFound('Lista no encontrada');
+      source = await prisma.knowledgeSource.update({ where: { id: existing.id }, data });
+    } else {
+      source = await prisma.knowledgeSource.create({ data: { tenantId: req.auth.tenantId, botId: bot.id, kind: 'products', ...data } });
+    }
+    await enqueue(source.id);
+    await recordAudit({ tenantId: req.auth.tenantId, actorUserId: req.auth.userId, action: 'bot.knowledge.products', entity: 'bot', entityId: bot.id, metadata: { source: source.name, products: products.length } });
+    res.status(input.sourceId ? 200 : 201).json({ ...serializeSource(source), sample: products.slice(0, 5) });
+  })
+);
+
+/** La lista completa (para revisarla o exportarla como CSV). */
+router.get(
+  '/bots/:id/knowledge/:sourceId/products',
+  asyncHandler(async (req, res) => {
+    const bot = await loadBot(req);
+    const source = await prisma.knowledgeSource.findFirst({ where: { id: req.params.sourceId, botId: bot.id, kind: 'products' } });
+    if (!source) throw notFound('Lista no encontrada');
+    const products = parseStoredProducts(source);
+    if (req.query.format === 'csv') {
+      const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const csv = ['id,nombre,precio,categoria', ...products.map((p) => [esc(p.id), esc(p.name), p.price ?? '', esc(p.category ?? '')].join(','))].join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${source.name.replace(/[^\w.-]+/g, '_')}.csv"`);
+      return res.send(`\ufeff${csv}\n`);
+    }
+    res.json({ id: source.id, name: source.name, products });
+  })
+);
+
+/** Probar la búsqueda de productos sin enviar nada por WhatsApp. */
+router.post(
+  '/bots/:id/ai/products/test',
+  asyncHandler(async (req, res) => {
+    const bot = await loadBot(req);
+    const input = z.object({ message: z.string().trim().min(1).max(500), limit: z.number().int().min(1).max(30).default(10) }).parse(req.body);
+    const products = await loadProducts(bot.id);
+    if (!products.length) throw badRequest('Este chatbot no tiene una lista de productos lista. Cárgala en "Catálogo de productos".');
+    const result = await searchProducts({ bot, products, text: input.message, limit: input.limit });
+    res.json({ ...result, text: productsText(result.items, { none: result.none }), total: products.length });
   })
 );
 
